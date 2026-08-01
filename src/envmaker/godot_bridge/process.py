@@ -11,8 +11,10 @@ __all__ = [
     "ENV_RUN_ROOT",
     "ENV_SESSION",
     "ENV_TOKEN",
+    "GODOT_BIN_ENV",
     "ProcessError",
     "GodotProcess",
+    "resolve_godot_binary",
 ]
 
 ENV_HOST: str = "ENVMAKER_BRIDGE_HOST"
@@ -20,6 +22,21 @@ ENV_PORT: str = "ENVMAKER_BRIDGE_PORT"
 ENV_RUN_ROOT: str = "ENVMAKER_BRIDGE_RUN_ROOT"
 ENV_SESSION: str = "ENVMAKER_BRIDGE_SESSION"
 ENV_TOKEN: str = "ENVMAKER_BRIDGE_TOKEN"
+
+GODOT_BIN_ENV: str = "GODOT_BIN"
+
+_DEFAULT_GODOT_BIN: Path = (
+    Path(__file__).resolve().parents[3]
+    / "tools/godot/Godot.app/Contents/MacOS/Godot"
+)
+
+
+def resolve_godot_binary() -> Path:
+    """Resolve the Godot executable: $GODOT_BIN overrides the vendored default."""
+    override = os.environ.get(GODOT_BIN_ENV, "")
+    if override:
+        return Path(override)
+    return _DEFAULT_GODOT_BIN
 
 _SANITIZED_ENV_NAMES = ("PATH", "HOME", "USER", "TMPDIR")
 

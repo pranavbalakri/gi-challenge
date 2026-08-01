@@ -1,0 +1,15 @@
+{
+  "provider": "scripted",
+  "model_name": "frozen-village-fixture",
+  "prompt_version": "1",
+  "turns": [
+    {"code_file": "rev1.py"},
+    {"tool": "compile_environment", "args": {}},
+    {"tool": "patch_program", "args": {}, "patch_file": "patch1.txt"},
+    {"tool": "compile_environment", "args": {}},
+    {"tool": "simulate_navigation", "args": {}},
+    {"tool": "patch_program", "args": {}, "patch_file": "patch2.txt"},
+    {"tool": "compile_environment", "args": {}},
+    {"tool": "simulate_navigation", "args": {}}
+  ]
+}

@@ -61,7 +61,7 @@ def _full_model(*, seed: int = 0) -> EnvironmentModel:
             kit="stone_ruin",
         )
         .landmark("marker", position=(0.0, 7.0), kit="obelisk")
-        .scatter("grove", kit="shrub", count=3, min_spacing=1.0)
+        .scatter("grove", region="ground", kit="shrub", count=3, min_spacing=1.0)
         .spawn("hero", position=(0.0, 0.0))
         .camera(orthographic_size=16.0)
         .freeze()
@@ -146,7 +146,7 @@ def test_compile_scatter_count_spacing_and_bounds() -> None:
     model = (
         EnvironmentBuilder("scatter-demo", seed=11)
         .ground("ground", footprint=_square(10.0), material="grass")
-        .scatter("grove", kit="shrub", count=4, min_spacing=1.5)
+        .scatter("grove", region="ground", kit="shrub", count=4, min_spacing=1.5)
         .spawn("hero", position=(0.0, 0.0))
         .camera(orthographic_size=12.0)
         .freeze()
@@ -330,7 +330,7 @@ def test_compile_pine_scatter_parts_block() -> None:
     model = (
         EnvironmentBuilder("pine-demo", seed=2)
         .ground("ground", footprint=_square(40.0), material="grass")
-        .scatter("grove", kit="pine", count=2, min_spacing=4.0)
+        .scatter("grove", region="ground", kit="pine", count=2, min_spacing=4.0)
         .spawn("hero", position=(0.0, 0.0))
         .camera(orthographic_size=16.0)
         .freeze()
@@ -349,7 +349,7 @@ def test_compile_scatter_shortfall_raises() -> None:
     model = (
         EnvironmentBuilder("tight", seed=0)
         .ground("ground", footprint=_square(4.0), material="grass")
-        .scatter("grove", kit="pine", count=50, min_spacing=3.0)
+        .scatter("grove", region="ground", kit="pine", count=50, min_spacing=3.0)
         .spawn("hero", position=(0.0, 0.0))
         .camera(orthographic_size=12.0)
         .freeze()
@@ -364,7 +364,7 @@ def test_compile_scatter_avoids_blockers_and_spawn() -> None:
         EnvironmentBuilder("avoid", seed=5)
         .ground("ground", footprint=_square(30.0), material="grass")
         .water("lake", footprint=water)
-        .scatter("grove", kit="shrub", count=8, min_spacing=1.0)
+        .scatter("grove", region="ground", kit="shrub", count=8, min_spacing=1.0)
         .spawn("hero", position=(8.0, 8.0))
         .camera(orthographic_size=16.0)
         .freeze()

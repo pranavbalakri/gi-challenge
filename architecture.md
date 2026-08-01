@@ -2,7 +2,7 @@
 
 ## Scope and thesis
 
-`envforge` is an agent harness that accepts a text command and produces a playable, navigable environment. An authoring agent writes one readable Python program against a constrained SDK; a fault-contained worker executes it into an immutable `EnvironmentModel`; a compiler turns the model into a `CandidateScene`; Godot 4.7.1 materializes, collides, navigates, and renders it; harness-owned validators return typed, bounded feedback; the agent repairs the program; an automated agent traverses the accepted environment. The generated product is an immutable `EnvironmentDefinition`; environments carry no objectives, rewards, progression, or game rules.
+`envmaker` is an agent harness that accepts a text command and produces a playable, navigable environment. An authoring agent writes one readable Python program against a constrained SDK; a fault-contained worker executes it into an immutable `EnvironmentModel`; a compiler turns the model into a `CandidateScene`; Godot 4.7.1 materializes, collides, navigates, and renders it; harness-owned validators return typed, bounded feedback; the agent repairs the program; an automated agent traverses the accepted environment. The generated product is an immutable `EnvironmentDefinition`; environments carry no objectives, rewards, progression, or game rules.
 
 The central research claim:
 
@@ -15,7 +15,7 @@ The MVP is deliberately **3D-lite**: visually 3D and isometric, logically close 
 Complete and frozen (see `.superpowers/sdd/interfaces.md` and the ledger):
 
 - **Toolchain:** Python 3.12 via uv; Godot 4.7.1 at `tools/godot/`; `scripts/verify_toolchain.py` hard-gates both.
-- **Core contracts (`envforge.core`):** canonical fingerprints and content-addressed `ArtifactRef`/`ArtifactManifest` (BLAKE2b-256 identity + SHA-256 engine digest); bounded typed `Signal`s; `PromptRequirementSet`; `EnvironmentProgram` + fault-containment `WorkerExecution` records; metre-based `Vec3`/`Transform3D`; `EnvironmentModel`; `GodotSceneSpec`/`CandidateScene`; `WorldSnapshot`/`ObservationPacket`/`ControllerAction`; `NavigationProbe`/`EpisodeResult`; nine-stage `ValidationBundle`; `seal_definition`/`require_definition` with the candidate-vs-accepted type separation.
+- **Core contracts (`envmaker.core`):** canonical fingerprints and content-addressed `ArtifactRef`/`ArtifactManifest` (BLAKE2b-256 identity + SHA-256 engine digest); bounded typed `Signal`s; `PromptRequirementSet`; `EnvironmentProgram` + fault-containment `WorkerExecution` records; metre-based `Vec3`/`Transform3D`; `EnvironmentModel`; `GodotSceneSpec`/`CandidateScene`; `WorldSnapshot`/`ObservationPacket`/`ControllerAction`; `NavigationProbe`/`EpisodeResult`; nine-stage `ValidationBundle`; `seal_definition`/`require_definition` with the candidate-vs-accepted type separation.
 - **Bridge:** versioned JSON envelopes with session/request correlation and simulation tick IDs; 4-byte big-endian length-prefixed framing (1 MiB control cap, fatal poisoning); run-root `ArtifactStore`; protocol-faithful fake runner; `BridgeServer`/`BridgeSession`; sanitized `GodotProcess` (env-only credentials); the Godot project with autoloaded bridge, artifact loader, in-engine test harness, and live handshake integration tests.
 
 Four documented amendments govern where the MVP deviates from the original larger design: runtime GLB loading is formally deferred; the nine-stage bundle is retained with lean stage mappings; `SceneNode` gains an additive optional `visual` field under an `omit_when_none` canonical-serialization rule that keeps every pre-existing fingerprint byte-identical (guarded by a pinned-fingerprint regression test); dormant frozen enums (stairs/bridge connectors, RGB observations) remain frozen and unused.
@@ -79,7 +79,7 @@ The program describes semantic world content only — regions, ground, paths, wa
 
 ### Fault containment (not a hostile-code sandbox)
 
-Before execution the harness parses the AST and rejects anything outside the import allowlist (`envforge.sdk`, `math`) plus `exec`/`eval`/`open`/`__import__`/dunder-attribute access. Execution happens in a disposable subprocess with a temporary working directory, sanitized environment, wall/CPU timeout, and output-size cap; the model returns as canonical JSON over a pipe and is re-validated parent-side. Non-completed runs are quarantined per the `WorkerExecution` contract. This is accidental-fault containment; the documentation never claims a hostile-code security boundary.
+Before execution the harness parses the AST and rejects anything outside the import allowlist (`envmaker.sdk`, `math`) plus `exec`/`eval`/`open`/`__import__`/dunder-attribute access. Execution happens in a disposable subprocess with a temporary working directory, sanitized environment, wall/CPU timeout, and output-size cap; the model returns as canonical JSON over a pipe and is re-validated parent-side. Non-completed runs are quarantined per the `WorkerExecution` contract. This is accidental-fault containment; the documentation never claims a hostile-code security boundary.
 
 ### Tool surface (complete)
 
@@ -98,7 +98,7 @@ Feedback is always typed `Signal`s: stable failure code, human-readable explanat
 
 Each turn: read → patch → compile/probe/render/simulate → feedback. Generation stops on acceptance (all nine hard stages pass) or exhaustion (turn, wall-time, or token budget). Hard-validity status is harness-owned and cannot be waived by generated tests. Exhaustion preserves the best candidate and the complete trace; a hard-invalid candidate is never accepted or silently repaired by the harness.
 
-## EnvForge SDK
+## EnvMaker SDK
 
 Small, composable, footprint-first. Geometry is expressed through horizontal footprints and heights; the compiler realizes them as primitive boxes and cylinders (plus the single ground plane) with matching colliders — never mesh extrusion.
 
@@ -183,14 +183,14 @@ Secrets and absolute host paths are redacted from traces. Saved accepted program
 ## Reviewer contract
 
 ```bash
-uv run envforge demo --headless     # keyless end-to-end fixture: recompile, materialize,
+uv run envmaker demo --headless     # keyless end-to-end fixture: recompile, materialize,
                                     # validate, traverse, render, report
-uv run envforge demo --view         # same, in a window that visually plays the automated traversal
+uv run envmaker demo --view         # same, in a window that visually plays the automated traversal
                                     # (isometric view, optional top-down toggle; human control deferred)
-uv run envforge run "<prompt>" --seed 7    # live authoring with visible compile/repair events;
+uv run envmaker run "<prompt>" --seed 7    # live authoring with visible compile/repair events;
                                     # terminal states: accepted | rejected_after_budget |
                                     # provider_error | harness_error (only the last two are system failures)
-uv run envforge check               # fast keyless suite, non-recursive: explicit pytest list
+uv run envmaker check               # fast keyless suite, non-recursive: explicit pytest list
                                     # (tests --ignore=tests/cli) + Godot harness + headless demo
 ```
 
@@ -215,7 +215,7 @@ Small and honest: six frozen prompts (jungle valley with river and ruins; frozen
 ```text
 pyproject.toml            .python-version           uv.lock
 scripts/verify_toolchain.py
-src/envforge/
+src/envmaker/
   __init__.py  cli.py  runtime.py  validation.py  runlog.py  evaluation.py
   core/        artifacts.py contracts.py signals.py requirements.py program.py
                model.py scene_spec.py interaction.py episode.py definition.py

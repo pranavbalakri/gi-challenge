@@ -473,11 +473,15 @@ def _compile_scatter(
     payload: dict[str, _Any],
     *,
     seed: int,
+    ground_name: str,
     ground_footprint: _Polygon2D,
     blocker_polygons: list[_Polygon2D],
     walls: list[tuple[_Point, _Point, float]],
     spawn: _Point | None,
 ) -> list[_SceneNode]:
+    region = str(payload["region"])
+    if region != ground_name:
+        raise ValueError(f"unknown region: {region}")
     kit = _get_kit(str(payload["kit"]))
     count = int(payload["count"])
     min_spacing = float(payload["min_spacing"])
@@ -522,6 +526,7 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
     model = _EnvironmentModel.model_validate(model.model_dump())
 
     ground_footprint: _Polygon2D | None = None
+    ground_name: str | None = None
     spawn_name: str | None = None
     seen_ground = False
     seen_spawn = False
@@ -532,6 +537,7 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
             if seen_ground:
                 raise ValueError("duplicate ground component")
             seen_ground = True
+            ground_name = component.semantic_id
             ground_footprint = _polygon_from_payload(component.payload)
         elif discriminator == "spawn":
             if seen_spawn:
@@ -543,7 +549,7 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
                 raise ValueError("duplicate camera component")
             seen_camera = True
 
-    if ground_footprint is None:
+    if ground_footprint is None or ground_name is None:
         raise ValueError("missing ground component")
     if spawn_name is None:
         raise ValueError("missing spawn component")
@@ -578,6 +584,7 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
                     name,
                     payload,
                     seed=model.seed,
+                    ground_name=ground_name,
                     ground_footprint=ground_footprint,
                     blocker_polygons=blocker_polygons,
                     walls=walls,

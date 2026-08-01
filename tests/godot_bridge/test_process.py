@@ -196,10 +196,11 @@ sys.exit(3)
 
 from envmaker.core.contracts import MessageType
 from envmaker.godot_bridge.client import BridgeProtocolError, BridgeServer
+from envmaker.godot_bridge.process import resolve_godot_binary
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_GODOT_BIN = _REPO_ROOT / "tools/godot/Godot.app/Contents/MacOS/Godot"
+_GODOT_BIN = resolve_godot_binary()
 _GODOT_PROJECT = _REPO_ROOT / "godot"
 
 
@@ -411,3 +412,17 @@ print(json.dumps(sys.argv[1:]))
     windowed_argv = json.loads(windowed.stdout_path.read_text())
     assert "--headless" not in windowed_argv
     assert windowed_argv[0] == "--path"
+
+
+def test_resolve_godot_binary_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GODOT_BIN", "/opt/godot/bin/godot4")
+    assert resolve_godot_binary() == Path("/opt/godot/bin/godot4")
+
+    monkeypatch.delenv("GODOT_BIN")
+    default = resolve_godot_binary()
+    assert default.as_posix().endswith(
+        "tools/godot/Godot.app/Contents/MacOS/Godot"
+    )
+    assert default.is_absolute()

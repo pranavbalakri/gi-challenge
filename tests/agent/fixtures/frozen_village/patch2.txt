@@ -1,0 +1,10 @@
+<<<<<<< SEARCH
+    builder.obstacle(
+        "gate_ice",
+        footprint=Polygon2D([(-2.9, -1.2), (-1.1, -1.2), (-1.1, 1.2), (-2.9, 1.2)]),
+        height=1.2,
+        material="rock",
+    )
+=======
+
+>>>>>>> REPLACE

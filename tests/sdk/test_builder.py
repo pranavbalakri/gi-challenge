@@ -188,7 +188,7 @@ def _full_builder(*, seed: int = 0) -> "EnvironmentBuilder":
             kit="stone_ruin",
         )
         .landmark("marker", position=(0.0, 7.0), kit="obelisk")
-        .scatter("grove", kit="shrub", count=3, min_spacing=1.0)
+        .scatter("grove", region="ground", kit="shrub", count=3, min_spacing=1.0)
         .spawn("hero", position=(0.0, 0.0))
         .camera(orthographic_size=16.0)
     )

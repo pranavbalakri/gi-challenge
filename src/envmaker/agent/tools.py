@@ -1,0 +1,734 @@
+"""Bounded authoring tool surface for the EnvMaker agent harness."""
+
+from __future__ import annotations
+
+import copy as _copy
+import math as _math
+import re as _re
+from dataclasses import dataclass as _dataclass
+from dataclasses import field as _field
+from pathlib import Path as _Path
+from typing import Literal as _Literal
+
+from pydantic import BaseModel as _BaseModel
+from pydantic import ConfigDict as _ConfigDict
+from pydantic import Field as _Field
+
+from envmaker.core.artifacts import canonical_fingerprint as _canonical_fingerprint
+from envmaker.core.definition import HardStage as _HardStage
+from envmaker.core.definition import StageReport as _StageReport
+from envmaker.core.episode import NavigationProbe as _NavigationProbe
+from envmaker.core.model import EnvironmentModel as _EnvironmentModel
+from envmaker.core.program import ResourceLimits as _ResourceLimits
+from envmaker.core.scene_spec import CandidateScene as _CandidateScene
+from envmaker.core.scene_spec import ColliderShape as _ColliderShape
+from envmaker.core.scene_spec import PlaneVisual as _PlaneVisual
+from envmaker.core.scene_spec import SceneNode as _SceneNode
+from envmaker.core.signals import Signal as _Signal
+from envmaker.runlog import RunLog as _RunLog
+from envmaker.runlog import _redact as _redact_value
+from envmaker.sdk import SDK_VERSION as _SDK_VERSION
+from envmaker.validation import StaticValidation as _StaticValidation
+from envmaker.validation import validate_candidate as _validate_candidate
+from envmaker.validation import validate_static as _validate_static
+
+__all__ = [
+    "PatchResult",
+    "CompileResult",
+    "ProbeResult",
+    "RenderResult",
+    "NavigationResult",
+    "ToolContext",
+    "ToolSurface",
+]
+
+_SOURCE_CAP = 64 * 1024
+_PATCH_CAP = 16 * 1024
+_SIGNAL_CAP = 32
+_SEARCH_REPLACE = _re.compile(
+    r"^<<<<<<< SEARCH\n(.*)\n=======\n(.*)\n>>>>>>> REPLACE\n?\Z",
+    _re.DOTALL,
+)
+_PROBE_GRAMMAR = (
+    '"component <semantic_id>" | "bounds" | "blockers" | "spawn" | '
+    '"route <x1> <z1> <x2> <z2>"'
+)
+_AGENT_RADIUS = 0.4
+
+
+class PatchResult(_BaseModel):
+    """Outcome of a non-executing program patch attempt."""
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    ok: bool
+    reason: str = ""
+    new_source_fingerprint: str = ""
+
+
+class CompileResult(_BaseModel):
+    """Bounded static validation outcome for the current program."""
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    ok: bool
+    stage_outcomes: dict[str, bool] = _Field(default_factory=dict)
+    signals: tuple[_Signal, ...] = ()
+    model_fingerprint: str = ""
+    candidate_fingerprint: str = ""
+    reason: str = ""
+
+
+class ProbeResult(_BaseModel):
+    """Read-only measurement packet over the latest compiled candidate."""
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    ok: bool
+    query: str
+    data: dict[str, object] = _Field(default_factory=dict)
+    reason: str = ""
+
+
+class RenderResult(_BaseModel):
+    """Artifact-ref-only render capture result."""
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    ok: bool
+    view: str = ""
+    artifact_path: str = ""
+    blake2b256: str = ""
+    byte_count: int = 0
+    reason: str = ""
+
+
+class NavigationResult(_BaseModel):
+    """Live-runtime navigation validation summary."""
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    ok: bool
+    stage_outcomes: dict[str, bool] = _Field(default_factory=dict)
+    signals: tuple[_Signal, ...] = ()
+    ticks_used: int = 0
+    terminal_reason: str = ""
+    path_length_m: float = 0.0
+    reason: str = ""
+
+
+@_dataclass
+class ToolContext:
+    """Mutable tool state for one authoring run."""
+
+    source: str
+    limits: _ResourceLimits
+    run_dir: _Path
+    runlog: _RunLog
+    driver: object | None = None
+    probe: _NavigationProbe | None = None
+    static: _StaticValidation | None = None
+    runtime_reports: list[_StageReport] = _field(default_factory=list)
+    min_walkable_fraction: float = 0.5
+
+
+def _source_fingerprint(source: str) -> str:
+    return _canonical_fingerprint({"source": source, "sdk_version": _SDK_VERSION})
+
+
+def _is_unified_diff(patch: str) -> bool:
+    return (
+        patch.startswith("--- ")
+        or patch.startswith("+++ ")
+        or "\n@@" in patch
+        or patch.startswith("@@")
+    )
+
+
+def _apply_search_replace(source: str, patch: str) -> tuple[str | None, str]:
+    match = _SEARCH_REPLACE.match(patch)
+    if match is None:
+        return None, "search/replace patch must use the exact delimiter format"
+    old, new = match.group(1), match.group(2)
+    count = source.count(old)
+    if count != 1:
+        return None, f"search text must occur exactly once (found {count})"
+    return source.replace(old, new, 1), ""
+
+
+def _apply_unified_diff(source: str, patch: str) -> tuple[str | None, str]:
+    working = source.splitlines()
+    keep_final_newline = source.endswith("\n")
+    lines = patch.splitlines()
+    if not lines:
+        return None, "unified diff is empty"
+
+    index = 0
+    while index < len(lines) and (
+        lines[index].startswith("--- ") or lines[index].startswith("+++ ")
+    ):
+        index += 1
+
+    offset = 0
+    saw_hunk = False
+    while index < len(lines):
+        header = lines[index]
+        match = _re.match(
+            r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@",
+            header,
+        )
+        if match is None:
+            return None, "unified diff hunk header mismatch"
+        saw_hunk = True
+        old_start = int(match.group(1))
+        index += 1
+        hunk_old: list[str] = []
+        hunk_new: list[str] = []
+        while index < len(lines) and not lines[index].startswith("@@"):
+            row = lines[index]
+            if row.startswith("\\"):
+                index += 1
+                continue
+            if row.startswith(" "):
+                hunk_old.append(row[1:])
+                hunk_new.append(row[1:])
+            elif row.startswith("-"):
+                hunk_old.append(row[1:])
+            elif row.startswith("+"):
+                hunk_new.append(row[1:])
+            else:
+                return None, "unified diff line prefix mismatch"
+            index += 1
+
+        if not hunk_old:
+            return None, "insertion hunks require at least one context line"
+
+        at = old_start - 1 + offset
+        if at < 0 or at + len(hunk_old) > len(working):
+            return None, "unified diff hunk mismatch"
+        if working[at : at + len(hunk_old)] != hunk_old:
+            return None, "unified diff hunk mismatch"
+        working[at : at + len(hunk_old)] = hunk_new
+        offset += len(hunk_new) - len(hunk_old)
+
+    if not saw_hunk:
+        return None, "unified diff has no hunks"
+
+    text = "\n".join(working)
+    if keep_final_newline:
+        text += "\n"
+    return text, ""
+
+
+def _yaw_from_basis(node: _SceneNode) -> float:
+    return _math.atan2(-node.transform.basis_x.z, node.transform.basis_x.x)
+
+
+def _local_xz(
+    world_x: float,
+    world_z: float,
+    origin_x: float,
+    origin_z: float,
+    yaw: float,
+) -> tuple[float, float]:
+    dx = world_x - origin_x
+    dz = world_z - origin_z
+    cos_yaw = _math.cos(-yaw)
+    sin_yaw = _math.sin(-yaw)
+    return (cos_yaw * dx + sin_yaw * dz, -sin_yaw * dx + cos_yaw * dz)
+
+
+def _blocker_oriented(node: _SceneNode) -> dict[str, object] | None:
+    collider = node.collider
+    if collider is None or isinstance(node.visual, _PlaneVisual):
+        return None
+    if collider.shape is _ColliderShape.CYLINDER:
+        radius = float(collider.dimensions["radius"])
+        half_x = half_z = radius
+    elif "x" in collider.dimensions and "z" in collider.dimensions:
+        half_x = float(collider.dimensions["x"]) / 2.0
+        half_z = float(collider.dimensions["z"]) / 2.0
+    else:
+        return None
+    return {
+        "semantic_id": node.semantic_id,
+        "origin_x": node.transform.origin.x,
+        "origin_z": node.transform.origin.z,
+        "yaw": _yaw_from_basis(node),
+        "half_x": half_x,
+        "half_z": half_z,
+    }
+
+
+def _blocker_rect(node: _SceneNode) -> dict[str, object] | None:
+    """Axis-aligned world AABB of an oriented blocker (listing approximation)."""
+
+    oriented = _blocker_oriented(node)
+    if oriented is None:
+        return None
+    half_x = float(oriented["half_x"])
+    half_z = float(oriented["half_z"])
+    yaw = float(oriented["yaw"])
+    cx = float(oriented["origin_x"])
+    cz = float(oriented["origin_z"])
+    cos_yaw = abs(_math.cos(yaw))
+    sin_yaw = abs(_math.sin(yaw))
+    extent_x = half_x * cos_yaw + half_z * sin_yaw
+    extent_z = half_x * sin_yaw + half_z * cos_yaw
+    return {
+        "semantic_id": oriented["semantic_id"],
+        "min_x": cx - extent_x,
+        "max_x": cx + extent_x,
+        "min_z": cz - extent_z,
+        "max_z": cz + extent_z,
+    }
+
+
+def _segment_hits_oriented(
+    x1: float,
+    z1: float,
+    x2: float,
+    z2: float,
+    oriented: dict[str, object],
+) -> bool:
+    """Return whether a segment intersects a yaw-aware blocker footprint."""
+
+    origin_x = float(oriented["origin_x"])
+    origin_z = float(oriented["origin_z"])
+    yaw = float(oriented["yaw"])
+    half_x = float(oriented["half_x"])
+    half_z = float(oriented["half_z"])
+    lx1, lz1 = _local_xz(x1, z1, origin_x, origin_z, yaw)
+    lx2, lz2 = _local_xz(x2, z2, origin_x, origin_z, yaw)
+
+    def _point_in(x: float, z: float) -> bool:
+        return abs(x) <= half_x and abs(z) <= half_z
+
+    if _point_in(lx1, lz1) or _point_in(lx2, lz2):
+        return True
+
+    dx = lx2 - lx1
+    dz = lz2 - lz1
+    p = (-dx, dx, -dz, dz)
+    q = (lx1 - (-half_x), half_x - lx1, lz1 - (-half_z), half_z - lz1)
+    u1, u2 = 0.0, 1.0
+    for pi, qi in zip(p, q):
+        if pi == 0.0:
+            if qi < 0.0:
+                return False
+            continue
+        t = qi / pi
+        if pi < 0.0:
+            u1 = max(u1, t)
+        else:
+            u2 = min(u2, t)
+        if u1 > u2:
+            return False
+    return True
+
+
+def _clearance_to_oriented(
+    x: float,
+    z: float,
+    oriented: dict[str, object],
+) -> float:
+    local_x, local_z = _local_xz(
+        x,
+        z,
+        float(oriented["origin_x"]),
+        float(oriented["origin_z"]),
+        float(oriented["yaw"]),
+    )
+    dx = max(abs(local_x) - float(oriented["half_x"]), 0.0)
+    dz = max(abs(local_z) - float(oriented["half_z"]), 0.0)
+    return _math.hypot(dx, dz)
+
+
+class ToolSurface:
+    """The agent's complete six-tool authoring surface."""
+
+    def __init__(self, context: ToolContext) -> None:
+        self.context = context
+
+    def _log(self, name: str, args: dict, outcome: dict) -> None:
+        self.context.runlog.append(
+            f"tool.{name}",
+            {"args": args, "outcome": outcome},
+        )
+
+    def read_program(self) -> str:
+        """Return the current program source, rejecting oversize programs."""
+
+        source = self.context.source
+        if len(source.encode("utf-8")) > _SOURCE_CAP:
+            self._log(
+                "read_program",
+                {},
+                {"ok": False, "reason": "program source exceeds 64 kib read cap"},
+            )
+            raise ValueError("program source exceeds 64 kib read cap")
+        self._log("read_program", {}, {"ok": True, "bytes": len(source.encode("utf-8"))})
+        # Redact before truncating so secrets near the end of a long source are not
+        # left behind by a blind prefix cut.
+        redacted_source = _redact_value(source)
+        if isinstance(redacted_source, str) and len(redacted_source) > 512:
+            redacted_source = redacted_source[:512]
+        self.context.runlog.append(
+            "tool.read_program.source",
+            {"source": redacted_source},
+        )
+        return source
+
+    def patch_program(self, patch: str) -> PatchResult:
+        """Apply a unified diff or search/replace patch without executing code."""
+
+        args = {"patch_bytes": len(patch.encode("utf-8")), "preview": patch[:200]}
+        if not self.context.source.strip():
+            result = PatchResult(
+                ok=False,
+                reason=(
+                    "no program exists yet; reply with the complete program in "
+                    "one ```python fenced block (not a tool call)"
+                ),
+            )
+            self._log("patch_program", args, result.model_dump())
+            return result
+        if len(patch.encode("utf-8")) > _PATCH_CAP:
+            result = PatchResult(ok=False, reason="patch exceeds 16 kib cap")
+            self._log("patch_program", args, result.model_dump())
+            return result
+
+        if _SEARCH_REPLACE.match(patch):
+            updated, reason = _apply_search_replace(self.context.source, patch)
+        elif _is_unified_diff(patch):
+            updated, reason = _apply_unified_diff(self.context.source, patch)
+        else:
+            updated, reason = None, "patch must be a unified diff or search/replace block"
+
+        if updated is None:
+            result = PatchResult(ok=False, reason=reason)
+            self._log("patch_program", args, result.model_dump())
+            return result
+
+        if len(updated.encode("utf-8")) > _SOURCE_CAP:
+            result = PatchResult(ok=False, reason="patched source exceeds 64 kib cap")
+            self._log("patch_program", args, result.model_dump())
+            return result
+
+        self.context.source = updated
+        self.context.static = None
+        self.context.runtime_reports = []
+        fingerprint = _source_fingerprint(updated)
+        result = PatchResult(
+            ok=True,
+            reason="patched",
+            new_source_fingerprint=fingerprint,
+        )
+        self._log("patch_program", args, result.model_dump())
+        return result
+
+    def compile_environment(self) -> CompileResult:
+        """Run static validation stages program through scene."""
+
+        static = _validate_static(self.context.source, limits=self.context.limits)
+        self.context.static = static
+        self.context.runtime_reports = []
+        outcomes = {report.stage.value: report.passed for report in static.reports}
+        signals: list[_Signal] = []
+        for report in static.reports:
+            signals.extend(report.signals)
+        signals = signals[:_SIGNAL_CAP]
+        ok = bool(static.reports) and all(report.passed for report in static.reports)
+        result = CompileResult(
+            ok=ok,
+            stage_outcomes=outcomes,
+            signals=tuple(signals),
+            model_fingerprint=(
+                static.model.model_fingerprint if static.model is not None else ""
+            ),
+            candidate_fingerprint=(
+                static.candidate.candidate_fingerprint
+                if static.candidate is not None
+                else ""
+            ),
+            reason="" if ok else "static validation failed",
+        )
+        self._log(
+            "compile_environment",
+            {"source_fingerprint": _source_fingerprint(self.context.source)},
+            {
+                "ok": result.ok,
+                "stages": result.stage_outcomes,
+                "signal_count": len(result.signals),
+            },
+        )
+        return result
+
+    def probe_environment(self, query: str) -> ProbeResult:
+        """Return read-only measurements over the latest compiled model/candidate."""
+
+        static = self.context.static
+        if static is None or static.candidate is None:
+            result = ProbeResult(
+                ok=False,
+                query=query,
+                reason="probe requires a prior successful compile",
+            )
+            self._log("probe_environment", {"query": query}, result.model_dump())
+            return result
+
+        model = static.model
+        candidate = static.candidate
+        try:
+            data = self._probe_data(query, model, candidate)
+        except ValueError as exc:
+            result = ProbeResult(ok=False, query=query, reason=str(exc))
+            self._log("probe_environment", {"query": query}, result.model_dump())
+            return result
+
+        result = ProbeResult(ok=True, query=query, data=data)
+        self._log(
+            "probe_environment",
+            {"query": query},
+            {"ok": True, "keys": sorted(data.keys())},
+        )
+        return result
+
+    def _probe_data(
+        self,
+        query: str,
+        model: _EnvironmentModel | None,
+        candidate: _CandidateScene,
+    ) -> dict[str, object]:
+        text = query.strip()
+        if text.startswith("component "):
+            if model is None:
+                raise ValueError("component probe requires a compiled model")
+            semantic_id = text[len("component ") :].strip()
+            for component in model.components:
+                if component.semantic_id == semantic_id:
+                    return {
+                        "semantic_id": semantic_id,
+                        "kind": component.kind.value,
+                        "payload": _copy.deepcopy(component.payload),
+                    }
+            raise ValueError(f"unknown component semantic id: {semantic_id}")
+
+        if text == "bounds":
+            ground = next(
+                (
+                    node
+                    for node in candidate.scene.nodes
+                    if isinstance(node.visual, _PlaneVisual)
+                ),
+                None,
+            )
+            if ground is None or not isinstance(ground.visual, _PlaneVisual):
+                raise ValueError("candidate has no ground plane")
+            return {
+                "ground_semantic_id": ground.semantic_id,
+                "center": [
+                    ground.transform.origin.x,
+                    ground.transform.origin.z,
+                ],
+                "size_x": ground.visual.size_x,
+                "size_z": ground.visual.size_z,
+                "node_count": len(candidate.scene.nodes),
+            }
+
+        if text == "blockers":
+            blockers = []
+            for node in candidate.scene.nodes:
+                rect = _blocker_rect(node)
+                if rect is not None:
+                    blockers.append(rect)
+            return {"blockers": blockers}
+
+        if text == "spawn":
+            spawn_id = candidate.scene.controller_semantic_id
+            spawn = next(
+                node
+                for node in candidate.scene.nodes
+                if node.semantic_id == spawn_id
+            )
+            sx = spawn.transform.origin.x
+            sz = spawn.transform.origin.z
+            clearances = []
+            nearest = None
+            nearest_distance = None
+            for node in candidate.scene.nodes:
+                oriented = _blocker_oriented(node)
+                if oriented is None:
+                    continue
+                distance = _clearance_to_oriented(sx, sz, oriented)
+                clearances.append(
+                    {
+                        "semantic_id": node.semantic_id,
+                        "clearance": distance,
+                    }
+                )
+                if nearest_distance is None or distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest = node.semantic_id
+            return {
+                "position": [sx, sz],
+                "nearest_blocker": nearest,
+                "nearest_clearance": (
+                    nearest_distance if nearest_distance is not None else 0.0
+                ),
+                "agent_radius": _AGENT_RADIUS,
+                "clearances": clearances,
+            }
+
+        route_match = _re.fullmatch(
+            r"route\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+"
+            r"([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)",
+            text,
+        )
+        if route_match is not None:
+            x1, z1, x2, z2 = (float(group) for group in route_match.groups())
+            hits = []
+            for node in candidate.scene.nodes:
+                oriented = _blocker_oriented(node)
+                if oriented is None:
+                    continue
+                if _segment_hits_oriented(x1, z1, x2, z2, oriented):
+                    hits.append(node.semantic_id)
+            return {
+                "distance": _math.hypot(x2 - x1, z2 - z1),
+                "blockers_intersected": hits,
+            }
+
+        raise ValueError(f"unknown probe query; expected {_PROBE_GRAMMAR}")
+
+    def render_environment(
+        self,
+        view: _Literal["isometric", "topdown"] | str,
+    ) -> RenderResult:
+        """Capture a render artifact ref through the optional runtime driver."""
+
+        if view not in {"isometric", "topdown"}:
+            result = RenderResult(ok=False, view=str(view), reason="view must be isometric or topdown")
+            self._log("render_environment", {"view": view}, result.model_dump())
+            return result
+        if self.context.driver is None:
+            result = RenderResult(
+                ok=False,
+                view=view,
+                reason="driver unavailable in static context",
+            )
+            self._log("render_environment", {"view": view}, result.model_dump())
+            return result
+        try:
+            artifact = self.context.driver.render(view)
+            path = str(getattr(artifact, "path", ""))
+            digest = str(getattr(artifact, "blake2b256", ""))
+            byte_count = int(getattr(artifact, "byte_count", 0))
+            if byte_count <= 0 or len(digest) != 64 or not path:
+                raise RuntimeError("render artifact is not verified")
+            result = RenderResult(
+                ok=True,
+                view=view,
+                artifact_path=path,
+                blake2b256=digest,
+                byte_count=byte_count,
+            )
+        except Exception as exc:
+            result = RenderResult(
+                ok=False,
+                view=view,
+                reason=f"render failed: {exc}",
+            )
+        self._log(
+            "render_environment",
+            {"view": view},
+            {
+                "ok": result.ok,
+                "artifact_path": result.artifact_path,
+                "byte_count": result.byte_count,
+            },
+        )
+        return result
+
+    def simulate_navigation(self) -> NavigationResult:
+        """Run live-runtime stages materialization through camera when available."""
+
+        if self.context.driver is None:
+            result = NavigationResult(
+                ok=False,
+                reason="driver unavailable in static context",
+            )
+            self._log("simulate_navigation", {}, result.model_dump())
+            return result
+        if self.context.probe is None:
+            result = NavigationResult(
+                ok=False,
+                reason="probe unavailable in static context",
+            )
+            self._log("simulate_navigation", {}, result.model_dump())
+            return result
+        static = self.context.static
+        if (
+            static is None
+            or static.model is None
+            or static.candidate is None
+            or not all(report.passed for report in static.reports)
+        ):
+            result = NavigationResult(
+                ok=False,
+                reason="simulate requires a prior successful compile",
+            )
+            self._log("simulate_navigation", {}, result.model_dump())
+            return result
+
+        reports = _validate_candidate(
+            static.model,
+            static.candidate,
+            self.context.driver,
+            probe=self.context.probe,
+            min_walkable_fraction=self.context.min_walkable_fraction,
+        )
+        self.context.runtime_reports = list(reports)
+        outcomes = {report.stage.value: report.passed for report in reports}
+        ok = bool(reports) and all(report.passed for report in reports)
+        signals: list[_Signal] = []
+        for report in reports:
+            signals.extend(report.signals)
+        signals = signals[:_SIGNAL_CAP]
+
+        ticks_used = 0
+        terminal_reason = ""
+        path_length_m = 0.0
+        controller = next(
+            (report for report in reports if report.stage is _HardStage.CONTROLLER),
+            None,
+        )
+        if controller is not None:
+            for signal in controller.signals:
+                measurements = signal.measurements
+                if "terminal_reason" in measurements:
+                    ticks_used = int(measurements.get("ticks_used", 0))
+                    terminal_reason = str(measurements.get("terminal_reason", ""))
+                    path_length_m = float(measurements.get("path_length_m", 0.0))
+                    break
+
+        result = NavigationResult(
+            ok=ok,
+            stage_outcomes=outcomes,
+            signals=tuple(signals),
+            ticks_used=ticks_used,
+            terminal_reason=terminal_reason,
+            path_length_m=path_length_m,
+            reason="" if ok else "runtime validation failed",
+        )
+        self._log(
+            "simulate_navigation",
+            {"probe": self.context.probe.target_landmark_id},
+            {
+                "ok": result.ok,
+                "stages": result.stage_outcomes,
+                "signal_count": len(result.signals),
+                "terminal_reason": result.terminal_reason,
+            },
+        )
+        return result

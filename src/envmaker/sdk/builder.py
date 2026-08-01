@@ -151,6 +151,7 @@ class EnvironmentBuilder:
         self._names: set[str] = set()
         self._components: list[_SemanticComponent] = []
         self._ground_footprint: _Polygon2D | None = None
+        self._ground_name: str | None = None
         self._has_ground = False
         self._has_spawn = False
         self._has_camera = False
@@ -210,6 +211,7 @@ class EnvironmentBuilder:
         material = _require_material(material)
         semantic_id = self._claim_name(name)
         self._has_ground = True
+        self._ground_name = semantic_id
         self._ground_footprint = footprint
         return self._append(
             semantic_id,
@@ -397,13 +399,20 @@ class EnvironmentBuilder:
         self,
         name: str,
         *,
+        region: str,
         kit: str,
         count: int,
         min_spacing: float,
     ) -> EnvironmentBuilder:
-        """Declare a seeded vegetation scatter over the ground footprint."""
+        """Declare a seeded vegetation scatter over the ground footprint.
+
+        ``region`` must name the already-declared ground component. Scatter
+        still samples over that ground footprint; declare ground before scatter.
+        """
 
         self._ensure_mutable()
+        if region != self._ground_name:
+            raise ValueError(f"unknown region: {region}")
         if (
             not isinstance(count, int)
             or isinstance(count, bool)
@@ -423,6 +432,7 @@ class EnvironmentBuilder:
             _ComponentKind.PROP,
             {
                 "component": "scatter",
+                "region": region,
                 "kit": kit,
                 "count": count,
                 "min_spacing": min_spacing,
