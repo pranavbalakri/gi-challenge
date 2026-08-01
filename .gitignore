@@ -1,0 +1,11 @@
+architecture.md
+instructions.md
+plan.md
+.env
+.superpowers/
+__pycache__/
+.pytest_cache/
+.venv/
+runs/
+tools/godot/
+.godot/

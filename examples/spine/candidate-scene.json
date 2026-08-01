@@ -1,0 +1,448 @@
+{
+  "scene": {
+    "nodes": [
+      {
+        "node_id": "ground",
+        "semantic_id": "ground",
+        "transform": {
+          "origin": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": {
+          "shape": "box",
+          "dimensions": {
+            "x": 40.0,
+            "y": 0.5,
+            "z": 40.0
+          }
+        },
+        "navmesh_contributor": true,
+        "fade_group": "",
+        "visual": {
+          "shape": "plane",
+          "size_x": 40.0,
+          "size_z": 40.0,
+          "material": "grass"
+        }
+      },
+      {
+        "node_id": "boulder",
+        "semantic_id": "boulder",
+        "transform": {
+          "origin": {
+            "x": -6.0,
+            "y": 0.75,
+            "z": -8.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": {
+          "shape": "box",
+          "dimensions": {
+            "x": 2.0,
+            "y": 1.5,
+            "z": 2.0
+          }
+        },
+        "navmesh_contributor": true,
+        "fade_group": "",
+        "visual": {
+          "shape": "box",
+          "size": [
+            2.0,
+            1.5,
+            2.0
+          ],
+          "material": "rock"
+        }
+      },
+      {
+        "node_id": "pebble-east",
+        "semantic_id": "pebble-east",
+        "transform": {
+          "origin": {
+            "x": 8.0,
+            "y": 0.5,
+            "z": -3.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": {
+          "shape": "box",
+          "dimensions": {
+            "x": 1.2,
+            "y": 1.0,
+            "z": 1.2
+          }
+        },
+        "navmesh_contributor": true,
+        "fade_group": "",
+        "visual": {
+          "shape": "box",
+          "size": [
+            1.2,
+            1.0,
+            1.2
+          ],
+          "material": "rock"
+        }
+      },
+      {
+        "node_id": "pebble-west",
+        "semantic_id": "pebble-west",
+        "transform": {
+          "origin": {
+            "x": -10.0,
+            "y": 0.5,
+            "z": 6.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": {
+          "shape": "box",
+          "dimensions": {
+            "x": 1.2,
+            "y": 1.0,
+            "z": 1.2
+          }
+        },
+        "navmesh_contributor": true,
+        "fade_group": "",
+        "visual": {
+          "shape": "box",
+          "size": [
+            1.2,
+            1.0,
+            1.2
+          ],
+          "material": "rock"
+        }
+      },
+      {
+        "node_id": "rampart",
+        "semantic_id": "rampart",
+        "transform": {
+          "origin": {
+            "x": 0.0,
+            "y": 1.25,
+            "z": 0.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": {
+          "shape": "box",
+          "dimensions": {
+            "x": 36.0,
+            "y": 2.5,
+            "z": 0.6
+          }
+        },
+        "navmesh_contributor": true,
+        "fade_group": "",
+        "visual": {
+          "shape": "box",
+          "size": [
+            36.0,
+            2.5,
+            0.6
+          ],
+          "material": "stone"
+        }
+      },
+      {
+        "node_id": "ruin-north",
+        "semantic_id": "ruin-north",
+        "transform": {
+          "origin": {
+            "x": 12.0,
+            "y": 1.0,
+            "z": 11.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": {
+          "shape": "box",
+          "dimensions": {
+            "x": 4.0,
+            "y": 2.0,
+            "z": 0.5
+          }
+        },
+        "navmesh_contributor": true,
+        "fade_group": "",
+        "visual": {
+          "shape": "box",
+          "size": [
+            4.0,
+            2.0,
+            0.5
+          ],
+          "material": "stone"
+        }
+      },
+      {
+        "node_id": "ruin-south",
+        "semantic_id": "ruin-south",
+        "transform": {
+          "origin": {
+            "x": 12.0,
+            "y": 1.0,
+            "z": 15.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": {
+          "shape": "box",
+          "dimensions": {
+            "x": 4.0,
+            "y": 2.0,
+            "z": 0.5
+          }
+        },
+        "navmesh_contributor": true,
+        "fade_group": "",
+        "visual": {
+          "shape": "box",
+          "size": [
+            4.0,
+            2.0,
+            0.5
+          ],
+          "material": "stone"
+        }
+      },
+      {
+        "node_id": "ruin-back",
+        "semantic_id": "ruin-back",
+        "transform": {
+          "origin": {
+            "x": 14.25,
+            "y": 1.0,
+            "z": 13.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": {
+          "shape": "box",
+          "dimensions": {
+            "x": 0.5,
+            "y": 2.0,
+            "z": 3.5
+          }
+        },
+        "navmesh_contributor": true,
+        "fade_group": "",
+        "visual": {
+          "shape": "box",
+          "size": [
+            0.5,
+            2.0,
+            3.5
+          ],
+          "material": "stone"
+        }
+      },
+      {
+        "node_id": "obelisk",
+        "semantic_id": "obelisk",
+        "transform": {
+          "origin": {
+            "x": 17.0,
+            "y": 0.0,
+            "z": 17.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": null,
+        "navmesh_contributor": false,
+        "fade_group": "",
+        "visual": {
+          "shape": "cylinder",
+          "radius": 0.4,
+          "height": 2.5,
+          "material": "snow"
+        }
+      },
+      {
+        "node_id": "agent",
+        "semantic_id": "agent",
+        "transform": {
+          "origin": {
+            "x": -15.0,
+            "y": 0.5,
+            "z": -15.0
+          },
+          "basis_x": {
+            "x": 1.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "basis_y": {
+            "x": 0.0,
+            "y": 1.0,
+            "z": 0.0
+          },
+          "basis_z": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 1.0
+          }
+        },
+        "mesh": null,
+        "collider": null,
+        "navmesh_contributor": false,
+        "fade_group": "",
+        "visual": null
+      }
+    ],
+    "camera": {
+      "follow_semantic_id": "agent",
+      "orthographic_size": 16.0,
+      "fade_occluders": true
+    },
+    "controller_semantic_id": "agent"
+  },
+  "manifest": {
+    "root": "artifacts",
+    "entries": []
+  }
+}

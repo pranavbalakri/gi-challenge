@@ -1,0 +1,16 @@
+; Engine configuration file.
+config_version=5
+
+[application]
+
+config/name="EnvMaker Runner"
+config/features=PackedStringArray("4.7")
+run/main_scene="res://scene/main.tscn"
+
+[autoload]
+
+Bridge="*res://bridge/bridge.gd"
+
+[rendering]
+
+renderer/rendering_method="forward_plus"

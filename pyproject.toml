@@ -1,0 +1,32 @@
+[project]
+name = "envmaker"
+version = "0.1.0"
+description = "Text-to-environment agent harness"
+readme = "README.md"
+authors = [
+    { name = "Pranav Balakrishnan", email = "pb629@cornell.edu" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.1",
+    "pillow>=12.3.0",
+    "pydantic>=2.13.4",
+    "trimesh>=4.12.2",
+    "typer>=0.27.0",
+]
+
+[project.scripts]
+envmaker = "envmaker.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.164.0",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
