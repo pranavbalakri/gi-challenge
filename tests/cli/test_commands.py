@@ -420,8 +420,8 @@ def test_probe_selection_is_the_single_canonical_helper() -> None:
     from envmaker.validation import validate_static
 
     demo_source = (
-        __import__("pathlib").Path("examples/demo/environment.py").read_text()
-    )
+        Path(__file__).resolve().parents[2] / "examples/demo/environment.py"
+    ).read_text()
     static = validate_static(
         demo_source,
         limits=ResourceLimits(

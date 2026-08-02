@@ -85,10 +85,6 @@ def _sanitized_env_names() -> tuple[str, ...]:
     return _POSIX_SANITIZED_ENV_NAMES
 
 
-# Back-compat alias for tests/callers that still refer to the constant name.
-_SANITIZED_ENV_NAMES = _POSIX_SANITIZED_ENV_NAMES
-
-
 class ProcessError(RuntimeError):
     pass
 

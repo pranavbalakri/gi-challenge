@@ -1,5 +1,8 @@
 """Protocol-faithful fake Godot runner for bridge contract tests.
-Tick policy (N-001): an envelope-valid simulation request consumes its tick regardless of ok — matching real Godot. BridgeSession.last_tick remains ok-only; the Task 3 runtime driver owns its outbound tick counter.
+
+Tick policy: an envelope-valid simulation request consumes its tick
+regardless of ok — matching real Godot. BridgeSession.last_tick remains
+ok-only; the runtime driver owns its outbound tick counter.
 """
 
 from __future__ import annotations

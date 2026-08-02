@@ -8,7 +8,7 @@ Overall, it constructs an isometrically-displayed 2D environment (sort of like H
 
 Running the harness can be done as described below, in Claude Code. I did it in the terminal.
 
-**Requirements:** macOS arm64 (developed & verified) or Linux with Godot 4.7.1 via GODOT_BIN — headless Linux needs a virtual display (e.g. xvfb-run) for the windowed render capture; Windows is untested best-effort; Python 3.12, [uv](https://docs.astral.sh/uv/), and the vendored Godot 4.7.1 at `tools/godot/` — or point `GODOT_BIN=<path>` at your own Godot 4.7.1 binary.
+**Requirements:** Python 3.12, [uv](https://docs.astral.sh/uv/), and a Godot 4.7.1 binary — either placed at `tools/godot/Godot.app` (kept local; not committed to git) or pointed to via `GODOT_BIN=<path>`. Developed and verified on macOS arm64; Linux is best-effort via `GODOT_BIN` (headless boxes need a virtual display such as `xvfb-run` for the windowed render capture); Windows is untested.
 
 ```bash
 uv sync

@@ -683,7 +683,7 @@ def write_report(
             lines.append(
                 f"- `{row.prompt_id}` / `{row.variant}` / seed {row.seed}: "
                 f"first failing stages `{', '.join(codes[:4]) or 'unknown'}` "
-                f"(run_dir={row.run_dir})"
+                f"(run_dir={_repo_relative(row.run_dir)})"
             )
     lines.append("")
     lines.append(
@@ -693,19 +693,25 @@ def write_report(
     lines.append("")
     lines.append("## Limitations")
     lines.append("")
-    lines.append(
-        "_Stub: planner fills this section after live execution "
-        "(sample size, model variance, fixture bias, render occlusion, etc.)._"
-    )
+    for limitation in _STANDING_LIMITATIONS:
+        lines.append(f"- {limitation}")
     lines.append("")
 
+    sanitized_config = dict(config)
+    if "eval_root" in sanitized_config:
+        sanitized_config["eval_root"] = _repo_relative(
+            str(sanitized_config["eval_root"])
+        )
     sidecar = report_path.with_suffix(".json")
     sidecar.write_text(
         _json.dumps(
             {
-                "config": config,
-                "eval_root": config.get("eval_root"),
-                "results": [_asdict(row) for row in results],
+                "config": sanitized_config,
+                "eval_root": sanitized_config.get("eval_root"),
+                "results": [
+                    {**_asdict(row), "run_dir": _repo_relative(row.run_dir)}
+                    for row in results
+                ],
             },
             indent=2,
             sort_keys=True,
@@ -714,6 +720,34 @@ def write_report(
         encoding="utf-8",
     )
     report_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+_STANDING_LIMITATIONS: tuple[str, ...] = (
+    "Sample size: six prompts, one seed, two variants; rates are directional "
+    "evidence for the loop-vs-oneshot comparison, not statistics.",
+    "Base model: the default is weak (`gpt-4o-mini`) and acceptance is "
+    "sensitive to harness affordances (nudges); the frozen same-model "
+    "comparison is what the claim rests on.",
+    "Budgets: 8 provider turns / 600 s wall per run; runs one repair short "
+    "of acceptance count as rejected, and budgets are never extended.",
+    "Strict baseline: the one-shot variant gets the identical prompt but no "
+    "tool execution and no feedback; the measured gap is the value of typed "
+    "feedback, not prompt engineering.",
+    "Loop stage attribution derives from observed compile events in the "
+    "runlog; a run that never re-compiled reports its last known stages.",
+    "Prompt compliance is human-scored via the YAML checklists, not a hard "
+    "validator stage; runtime scope is a single walkable plane with "
+    "box/cylinder primitives, verified on macOS arm64.",
+)
+
+
+def _repo_relative(value: str) -> str:
+    """Render a path repo-relative so tracked reports never leak $HOME."""
+
+    try:
+        return str(_Path(value).resolve().relative_to(_REPO_ROOT))
+    except Exception:
+        return str(value)
 
 
 def _rate(numer: int, denom: int) -> str:

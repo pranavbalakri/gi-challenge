@@ -10,7 +10,7 @@
       "max_turns": 8,
       "wall_seconds": 600
     },
-    "eval_root": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7",
+    "eval_root": "runs/eval/20260801-233206-33e507f7",
     "model": "gpt-4o-mini",
     "prompt_version": "1",
     "prompts": [
@@ -84,13 +84,13 @@
       "loop"
     ]
   },
-  "eval_root": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7",
+  "eval_root": "runs/eval/20260801-233206-33e507f7",
   "results": [
     {
       "accepted": false,
       "error": "static validation failed",
       "prompt_id": "jungle_valley",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/jungle_valley-oneshot-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/jungle_valley-oneshot-s7",
       "seed": 7,
       "stages_passed": {
         "program": false
@@ -104,7 +104,7 @@
       "accepted": false,
       "error": "turn or wall budget exhausted",
       "prompt_id": "jungle_valley",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/jungle_valley-loop-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/jungle_valley-loop-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
@@ -122,7 +122,7 @@
       "accepted": false,
       "error": "no landmark probe available",
       "prompt_id": "frozen_village",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/frozen_village-oneshot-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/frozen_village-oneshot-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
@@ -140,7 +140,7 @@
       "accepted": false,
       "error": "turn or wall budget exhausted",
       "prompt_id": "frozen_village",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/frozen_village-loop-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/frozen_village-loop-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
@@ -161,7 +161,7 @@
       "accepted": false,
       "error": "static validation failed",
       "prompt_id": "desert_canyon",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/desert_canyon-oneshot-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/desert_canyon-oneshot-s7",
       "seed": 7,
       "stages_passed": {
         "program": false
@@ -175,7 +175,7 @@
       "accepted": false,
       "error": "turn or wall budget exhausted",
       "prompt_id": "desert_canyon",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/desert_canyon-loop-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/desert_canyon-loop-s7",
       "seed": 7,
       "stages_passed": {
         "program": false
@@ -189,7 +189,7 @@
       "accepted": false,
       "error": "static validation failed",
       "prompt_id": "industrial_yard",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/industrial_yard-oneshot-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/industrial_yard-oneshot-s7",
       "seed": 7,
       "stages_passed": {
         "program": false
@@ -203,7 +203,7 @@
       "accepted": true,
       "error": null,
       "prompt_id": "industrial_yard",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/industrial_yard-loop-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/industrial_yard-loop-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
@@ -225,7 +225,7 @@
       "accepted": false,
       "error": "static validation failed",
       "prompt_id": "island_settlement",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/island_settlement-oneshot-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/island_settlement-oneshot-s7",
       "seed": 7,
       "stages_passed": {
         "program": false
@@ -239,7 +239,7 @@
       "accepted": false,
       "error": "turn or wall budget exhausted",
       "prompt_id": "island_settlement",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/island_settlement-loop-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/island_settlement-loop-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
@@ -258,7 +258,7 @@
       "accepted": false,
       "error": "no landmark probe available",
       "prompt_id": "maze_garden",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/maze_garden-oneshot-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/maze_garden-oneshot-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
@@ -276,7 +276,7 @@
       "accepted": true,
       "error": null,
       "prompt_id": "maze_garden",
-      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/maze_garden-loop-s7",
+      "run_dir": "runs/eval/20260801-233206-33e507f7/maze_garden-loop-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,

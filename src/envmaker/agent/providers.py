@@ -344,8 +344,8 @@ class OpenAIProvider:
             for schema in _TOOL_SCHEMAS.values()
         ]
         # No extra system message: the loop's SYSTEM_PROMPT (messages[0])
-        # already carries the FIRST MOVE contract; duplicating it here was a
-        # drift hazard flagged in review.
+        # already carries the FIRST MOVE contract; duplicating it here would
+        # invite drift between the two copies.
         try:
             client = _openai.OpenAI(api_key=self._api_key)
             response = client.chat.completions.create(

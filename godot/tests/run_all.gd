@@ -791,6 +791,7 @@ func _test_camera_rig() -> void:
 	rig.frame_isometric(mover.global_position)
 	mover.global_position = Vector3(9.0, 0.0, -2.0)
 	await process_frame
+	await process_frame
 	var follow_expected: Vector3 = (
 		mover.global_position + camera.transform.basis.z * 30.0
 	)

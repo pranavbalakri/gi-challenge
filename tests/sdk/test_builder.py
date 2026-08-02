@@ -5,7 +5,6 @@ from pydantic import ValidationError
 
 from envmaker.core.model import ComponentKind
 from envmaker.sdk.footprints import (
-    ObbFit,
     Polygon2D,
     convex_hull,
     min_area_obb,

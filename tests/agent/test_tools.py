@@ -30,7 +30,7 @@ from envmaker.core.scene_spec import (
     SceneNode,
 )
 from envmaker.runlog import RunLog
-from envmaker.sdk import EnvironmentBuilder, Polygon2D, compile_environment_model
+from envmaker.sdk import EnvironmentBuilder, Polygon2D
 from envmaker.validation import StaticValidation
 
 

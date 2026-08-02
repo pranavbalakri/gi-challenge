@@ -1,7 +1,6 @@
 extends Node
 
 const Protocol := preload("res://bridge/protocol.gd")
-const ArtifactLoader := preload("res://scene/artifact_loader.gd")
 const Materializer := preload("res://scene/materializer.gd")
 const NavRuntime := preload("res://scene/nav_runtime.gd")
 const AgentController := preload("res://scene/agent_controller.gd")

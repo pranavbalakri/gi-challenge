@@ -100,9 +100,9 @@ def _is_tool_exchange(message: dict[str, object]) -> bool:
 def _trim_messages(messages: list[dict[str, object]]) -> None:
     """Drop oldest tool exchanges first; never the system or task prompts.
 
-    Review finding (B2 MAJOR): dropping only TOOL_RESULT entries starved the
-    context of feedback while info-free TOOL_CALL stubs accumulated, and the
-    fallback eventually evicted the task prompt itself.
+    Rationale: dropping only TOOL_RESULT entries would starve the context of
+    feedback while info-free TOOL_CALL stubs accumulated, and the fallback
+    would eventually evict the task prompt itself.
     """
 
     while len(messages) > _MESSAGE_CAP:
@@ -526,15 +526,9 @@ def run_authoring(
                 "signal_messages": messages_text[:2000],
                 "result": result,
             }
+            # The full result already rides on tool_call.payload.result; a
+            # separate tool_result event would duplicate it with no consumer.
             runlog.append("tool_call", tool_payload)
-            runlog.append(
-                "tool_result",
-                {
-                    "name": tool_name,
-                    "ok": result.get("ok"),
-                    "result": result,
-                },
-            )
 
             messages.append(
                 {

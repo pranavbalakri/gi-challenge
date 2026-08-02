@@ -22,17 +22,6 @@ static func visual_y_scale() -> float:
 	if raw.is_empty() or not raw.is_valid_float():
 		return DEFAULT_VISUAL_Y_SCALE
 	return clampf(raw.to_float(), 0.3, 1.0)
-const DEFAULT_VISUAL_Y_SCALE := 0.55
-
-
-static func visual_y_scale() -> float:
-	# Presentation knob: compresses mesh heights about y=0 so the scene reads
-	# as a top-down map with slight depth. Colliders and navigation are never
-	# touched. ENVMAKER_VISUAL_Y_SCALE overrides (clamped 0.3..1.0).
-	var raw := OS.get_environment("ENVMAKER_VISUAL_Y_SCALE")
-	if raw.is_empty() or not raw.is_valid_float():
-		return DEFAULT_VISUAL_Y_SCALE
-	return clampf(raw.to_float(), 0.3, 1.0)
 
 
 static func materialize(candidate: Dictionary, parent: Node) -> Dictionary:

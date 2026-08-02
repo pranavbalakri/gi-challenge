@@ -1,8 +1,8 @@
 """Verify the pinned EnvMaker toolchain and print a provenance record.
 
 Exits nonzero if any hard pin is violated. Renderer and physics backend are
-recorded as declared project configuration until Task 2 creates the Godot
-project that must match them.
+recorded as declared project configuration and must match the Godot project
+settings under godot/.
 """
 
 from __future__ import annotations
