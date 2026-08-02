@@ -685,3 +685,36 @@ def test_audit_resolves_runtime_subdir_and_waits_for_nav(tmp_path):
     assert result.ok, result.reason
     assert calls[:2] == ["load", "wait"], "must settle nav before rendering"
     assert len(result.images_b64) == 2
+
+
+def test_unified_diff_fuzzy_hunk_and_fences(tmp_path):
+    from envmaker.agent.tools import _apply_unified_diff, ToolContext, ToolSurface
+    from envmaker.core.program import ResourceLimits
+    from envmaker.runlog import RunLog
+
+    source = "alpha\nbravo\ncharlie\ndelta\n"
+    # Wrong line numbers, unique context: must apply via fuzzy location.
+    patch = "--- a\n+++ b\n@@ -9,2 +9,2 @@\n bravo\n-charlie\n+CHARLIE\n"
+    updated, reason = _apply_unified_diff(source, patch)
+    assert updated == "alpha\nbravo\nCHARLIE\ndelta\n", reason
+
+    # Ambiguous context must still fail.
+    dup_source = "x\ny\nx\ny\n"
+    dup_patch = "@@ -9,1 +9,1 @@\n-x\n+z\n"
+    updated, reason = _apply_unified_diff(dup_source, dup_patch)
+    assert updated is None and "exactly once" in reason
+
+    # Fenced patches unwrap at the tool boundary.
+    context = ToolContext(
+        source=source,
+        limits=ResourceLimits(
+            cpu_seconds=5, memory_mb=256, output_bytes=65536, wall_seconds=10
+        ),
+        run_dir=tmp_path,
+        runlog=RunLog(tmp_path / "r.jsonl"),
+    )
+    surface = ToolSurface(context)
+    fenced = "```diff\n--- a\n+++ b\n@@ -1,1 +1,1 @@\n-alpha\n+ALPHA\n```"
+    result = surface.patch_program(fenced)
+    assert result.ok, result.reason
+    assert context.source.startswith("ALPHA")

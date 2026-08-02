@@ -105,7 +105,7 @@ class _HappyDriver:
 
 def test_mvp_yaml_schema_sanity() -> None:
     config = load_eval_config(_MVP)
-    assert config["model"] == "gpt-4o-mini"
+    assert config["model"] == "gpt-5.4-mini"
     assert config["seeds"] == [7]
     assert config["variants"] == ["oneshot", "loop"]
     prompts = config["prompts"]

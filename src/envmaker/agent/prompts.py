@@ -48,8 +48,11 @@ shrub/vegetation/false.
 COMPOSITION (model places; harness measures only):
 Vary spacing and sizes on purpose (`prop(scale=...)`, `scatter(scale_range=...)`). \
 Group with intent rather than even salting. Keep the spawn→landmark approach open. \
-After compile passes and BEFORE the final simulate_navigation, optionally call \
-audit_render once; judge composition (clusters, voids, sightlines, scale variety, \
+After your FIRST clean compile, call audit_render once and check the \
+screenshots against the user's request (are things inside/outside/open/closed \
+where asked?). Apply AT MOST one round of fixes, recompile, then IMMEDIATELY \
+call simulate_navigation — do not keep polishing. Prefer SEARCH/REPLACE \
+patches (diff line numbers are error-prone). Judge composition (clusters, voids, sightlines, scale variety, \
 palette) from the images and aesthetics numbers; patch only for clear improvements \
 (budget 2 audits). The loop auto-seals after an all-pass simulate — audit first.
 

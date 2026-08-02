@@ -43,7 +43,7 @@ def test_system_prompt_contract_and_budget() -> None:
     assert 'probe_environment("aesthetics")' in SYSTEM_PROMPT or '"aesthetics"' in SYSTEM_PROMPT
     assert "COMPOSITION" in SYSTEM_PROMPT
     assert "audit_render" in SYSTEM_PROMPT
-    assert "BEFORE the final simulate_navigation" in SYSTEM_PROMPT
+    assert "IMMEDIATELY call simulate_navigation" in SYSTEM_PROMPT
     assert "yaw_jitter" in SYSTEM_PROMPT
     assert "scale_range" in SYSTEM_PROMPT
     assert "pine/vegetation/true (conical tree)" in SYSTEM_PROMPT

@@ -1,16 +1,16 @@
 # EnvMaker MVP evaluation report
 
-- model: `gpt-4o-mini`
+- model: `gpt-5.4-mini`
 - prompt_version: `1`
-- eval_root: `runs/eval/20260802-060818-d7c216ff`
+- eval_root: `runs/eval/20260802-065054-14e3ae07`
 - cells: 12
 
 ## Aggregate by variant
 
 | variant | n | program execution rate | hard-valid rate | traversal success rate | mean repair turns | mean latency (s) |
 | --- | --- | --- | --- | --- | --- | --- |
-| loop | 6 | 0.83 | 0.33 | 0.33 | 6.83 | 14.25 |
-| oneshot | 6 | 0.50 | 0.00 | 0.00 | n/a | 3.15 |
+| loop | 6 | 1.00 | 0.67 | 0.67 | 12.00 | 30.53 |
+| oneshot | 6 | 0.67 | 0.50 | 0.50 | n/a | 9.25 |
 
 Means exclude provider_error/harness_error rows; turns count every provider turn including the initial code turn.
 Loop-variant program execution is derived from observed compile events; a run that never compiled reports program=False.
@@ -19,31 +19,26 @@ Loop-variant program execution is derived from observed compile events; a run th
 
 | prompt_id | variant | seed | terminal_state | accepted | turns_used | wall_seconds | error |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| jungle_valley | oneshot | 7 | rejected_after_budget | False | 1 | 3.38 | no landmark probe available |
-| jungle_valley | loop | 7 | rejected_after_budget | False | 8 | 14.25 | turn or wall budget exhausted |
-| frozen_village | oneshot | 7 | rejected_after_budget | False | 1 | 2.91 | no landmark probe available |
-| frozen_village | loop | 7 | rejected_after_budget | False | 8 | 15.45 | turn or wall budget exhausted |
-| desert_canyon | oneshot | 7 | rejected_after_budget | False | 1 | 2.76 | static validation failed |
-| desert_canyon | loop | 7 | rejected_after_budget | False | 8 | 17.28 | turn or wall budget exhausted |
-| industrial_yard | oneshot | 7 | rejected_after_budget | False | 1 | 2.94 | static validation failed |
-| industrial_yard | loop | 7 | accepted | True | 3 | 9.69 |  |
-| island_settlement | oneshot | 7 | rejected_after_budget | False | 1 | 2.72 | static validation failed |
-| island_settlement | loop | 7 | rejected_after_budget | False | 8 | 15.05 | turn or wall budget exhausted |
-| maze_garden | oneshot | 7 | rejected_after_budget | False | 1 | 4.19 | no landmark probe available |
-| maze_garden | loop | 7 | accepted | True | 6 | 13.79 |  |
+| jungle_valley | oneshot | 7 | accepted | True | 1 | 16.07 |  |
+| jungle_valley | loop | 7 | rejected_after_budget | False | 16 | 36.75 | turn or wall budget exhausted |
+| frozen_village | oneshot | 7 | rejected_after_budget | False | 1 | 4.77 | oneshot contract violated: model called a tool |
+| frozen_village | loop | 7 | accepted | True | 8 | 18.76 |  |
+| desert_canyon | oneshot | 7 | rejected_after_budget | False | 1 | 5.41 | static validation failed |
+| desert_canyon | loop | 7 | accepted | True | 9 | 25.09 |  |
+| industrial_yard | oneshot | 7 | accepted | True | 1 | 9.18 |  |
+| industrial_yard | loop | 7 | accepted | True | 10 | 25.77 |  |
+| island_settlement | oneshot | 7 | accepted | True | 1 | 12.75 |  |
+| island_settlement | loop | 7 | accepted | True | 13 | 33.05 |  |
+| maze_garden | oneshot | 7 | rejected_after_budget | False | 1 | 7.32 | runtime validation failed |
+| maze_garden | loop | 7 | rejected_after_budget | False | 16 | 43.73 | turn or wall budget exhausted |
 
 ## Failed examples
 
-- `jungle_valley` / `oneshot` / seed 7: first failing stages `unknown` (run_dir=runs/eval/20260802-060818-d7c216ff/jungle_valley-oneshot-s7)
-- `jungle_valley` / `loop` / seed 7: first failing stages `controller, navigation` (run_dir=runs/eval/20260802-060818-d7c216ff/jungle_valley-loop-s7)
-- `frozen_village` / `oneshot` / seed 7: first failing stages `unknown` (run_dir=runs/eval/20260802-060818-d7c216ff/frozen_village-oneshot-s7)
-- `frozen_village` / `loop` / seed 7: first failing stages `controller` (run_dir=runs/eval/20260802-060818-d7c216ff/frozen_village-loop-s7)
-- `desert_canyon` / `oneshot` / seed 7: first failing stages `program` (run_dir=runs/eval/20260802-060818-d7c216ff/desert_canyon-oneshot-s7)
-- `desert_canyon` / `loop` / seed 7: first failing stages `scene` (run_dir=runs/eval/20260802-060818-d7c216ff/desert_canyon-loop-s7)
-- `industrial_yard` / `oneshot` / seed 7: first failing stages `program` (run_dir=runs/eval/20260802-060818-d7c216ff/industrial_yard-oneshot-s7)
-- `island_settlement` / `oneshot` / seed 7: first failing stages `program` (run_dir=runs/eval/20260802-060818-d7c216ff/island_settlement-oneshot-s7)
-- `island_settlement` / `loop` / seed 7: first failing stages `program` (run_dir=runs/eval/20260802-060818-d7c216ff/island_settlement-loop-s7)
-- `maze_garden` / `oneshot` / seed 7: first failing stages `unknown` (run_dir=runs/eval/20260802-060818-d7c216ff/maze_garden-oneshot-s7)
+- `jungle_valley` / `loop` / seed 7: first failing stages `navigation` (run_dir=runs/eval/20260802-065054-14e3ae07/jungle_valley-loop-s7)
+- `frozen_village` / `oneshot` / seed 7: first failing stages `unknown` (run_dir=runs/eval/20260802-065054-14e3ae07/frozen_village-oneshot-s7)
+- `desert_canyon` / `oneshot` / seed 7: first failing stages `program` (run_dir=runs/eval/20260802-065054-14e3ae07/desert_canyon-oneshot-s7)
+- `maze_garden` / `oneshot` / seed 7: first failing stages `navigation` (run_dir=runs/eval/20260802-065054-14e3ae07/maze_garden-oneshot-s7)
+- `maze_garden` / `loop` / seed 7: first failing stages `unknown` (run_dir=runs/eval/20260802-065054-14e3ae07/maze_garden-loop-s7)
 
 Provider/harness errors are reported separately from hard-validation failures (0 system-error cell(s) in this run).
 

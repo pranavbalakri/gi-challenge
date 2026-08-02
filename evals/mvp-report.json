@@ -7,11 +7,11 @@
         "output_bytes": 1048576,
         "wall_seconds": 60.0
       },
-      "max_turns": 8,
+      "max_turns": 16,
       "wall_seconds": 600
     },
-    "eval_root": "runs/eval/20260802-060818-d7c216ff",
-    "model": "gpt-4o-mini",
+    "eval_root": "runs/eval/20260802-065054-14e3ae07",
+    "model": "gpt-5.4-mini",
     "prompt_version": "1",
     "prompts": [
       {
@@ -84,35 +84,38 @@
       "loop"
     ]
   },
-  "eval_root": "runs/eval/20260802-060818-d7c216ff",
+  "eval_root": "runs/eval/20260802-065054-14e3ae07",
   "results": [
     {
-      "accepted": false,
-      "error": "no landmark probe available",
+      "accepted": true,
+      "error": null,
       "prompt_id": "jungle_valley",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/jungle_valley-oneshot-s7",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/jungle_valley-oneshot-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
+        "camera": true,
+        "controller": true,
+        "materialization": true,
+        "navigation": true,
         "program": true,
         "scene": true,
         "sdk_model": true,
         "semantic": true
       },
-      "terminal_state": "rejected_after_budget",
+      "terminal_state": "accepted",
       "turns_used": 1,
       "variant": "oneshot",
-      "wall_seconds": 3.379640458006179
+      "wall_seconds": 16.072186958015664
     },
     {
       "accepted": false,
       "error": "turn or wall budget exhausted",
       "prompt_id": "jungle_valley",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/jungle_valley-loop-s7",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/jungle_valley-loop-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
-        "controller": false,
         "materialization": true,
         "navigation": false,
         "program": true,
@@ -121,98 +124,27 @@
         "semantic": true
       },
       "terminal_state": "rejected_after_budget",
-      "turns_used": 8,
+      "turns_used": 16,
       "variant": "loop",
-      "wall_seconds": 14.247091958008241
+      "wall_seconds": 36.754108708002605
     },
     {
       "accepted": false,
-      "error": "no landmark probe available",
+      "error": "oneshot contract violated: model called a tool",
       "prompt_id": "frozen_village",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/frozen_village-oneshot-s7",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/frozen_village-oneshot-s7",
       "seed": 7,
-      "stages_passed": {
-        "asset": true,
-        "program": true,
-        "scene": true,
-        "sdk_model": true,
-        "semantic": true
-      },
+      "stages_passed": {},
       "terminal_state": "rejected_after_budget",
       "turns_used": 1,
       "variant": "oneshot",
-      "wall_seconds": 2.906378332991153
-    },
-    {
-      "accepted": false,
-      "error": "turn or wall budget exhausted",
-      "prompt_id": "frozen_village",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/frozen_village-loop-s7",
-      "seed": 7,
-      "stages_passed": {
-        "asset": true,
-        "controller": false,
-        "program": true,
-        "scene": true,
-        "sdk_model": true,
-        "semantic": true
-      },
-      "terminal_state": "rejected_after_budget",
-      "turns_used": 8,
-      "variant": "loop",
-      "wall_seconds": 15.448640291986521
-    },
-    {
-      "accepted": false,
-      "error": "static validation failed",
-      "prompt_id": "desert_canyon",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/desert_canyon-oneshot-s7",
-      "seed": 7,
-      "stages_passed": {
-        "program": false
-      },
-      "terminal_state": "rejected_after_budget",
-      "turns_used": 1,
-      "variant": "oneshot",
-      "wall_seconds": 2.758614124992164
-    },
-    {
-      "accepted": false,
-      "error": "turn or wall budget exhausted",
-      "prompt_id": "desert_canyon",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/desert_canyon-loop-s7",
-      "seed": 7,
-      "stages_passed": {
-        "asset": true,
-        "program": true,
-        "scene": false,
-        "sdk_model": true,
-        "semantic": true
-      },
-      "terminal_state": "rejected_after_budget",
-      "turns_used": 8,
-      "variant": "loop",
-      "wall_seconds": 17.27663899998879
-    },
-    {
-      "accepted": false,
-      "error": "static validation failed",
-      "prompt_id": "industrial_yard",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/industrial_yard-oneshot-s7",
-      "seed": 7,
-      "stages_passed": {
-        "program": false
-      },
-      "terminal_state": "rejected_after_budget",
-      "turns_used": 1,
-      "variant": "oneshot",
-      "wall_seconds": 2.9392023750115186
+      "wall_seconds": 4.766469334019348
     },
     {
       "accepted": true,
       "error": null,
-      "prompt_id": "industrial_yard",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/industrial_yard-loop-s7",
+      "prompt_id": "frozen_village",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/frozen_village-loop-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
@@ -226,15 +158,15 @@
         "semantic": true
       },
       "terminal_state": "accepted",
-      "turns_used": 3,
+      "turns_used": 8,
       "variant": "loop",
-      "wall_seconds": 9.691941083001439
+      "wall_seconds": 18.761137000023155
     },
     {
       "accepted": false,
       "error": "static validation failed",
-      "prompt_id": "island_settlement",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/island_settlement-oneshot-s7",
+      "prompt_id": "desert_canyon",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/desert_canyon-oneshot-s7",
       "seed": 7,
       "stages_passed": {
         "program": false
@@ -242,45 +174,13 @@
       "terminal_state": "rejected_after_budget",
       "turns_used": 1,
       "variant": "oneshot",
-      "wall_seconds": 2.7205034579965286
-    },
-    {
-      "accepted": false,
-      "error": "turn or wall budget exhausted",
-      "prompt_id": "island_settlement",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/island_settlement-loop-s7",
-      "seed": 7,
-      "stages_passed": {
-        "program": false
-      },
-      "terminal_state": "rejected_after_budget",
-      "turns_used": 8,
-      "variant": "loop",
-      "wall_seconds": 15.047993290994782
-    },
-    {
-      "accepted": false,
-      "error": "no landmark probe available",
-      "prompt_id": "maze_garden",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/maze_garden-oneshot-s7",
-      "seed": 7,
-      "stages_passed": {
-        "asset": true,
-        "program": true,
-        "scene": true,
-        "sdk_model": true,
-        "semantic": true
-      },
-      "terminal_state": "rejected_after_budget",
-      "turns_used": 1,
-      "variant": "oneshot",
-      "wall_seconds": 4.1948951670201495
+      "wall_seconds": 5.40913233300671
     },
     {
       "accepted": true,
       "error": null,
-      "prompt_id": "maze_garden",
-      "run_dir": "runs/eval/20260802-060818-d7c216ff/maze_garden-loop-s7",
+      "prompt_id": "desert_canyon",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/desert_canyon-loop-s7",
       "seed": 7,
       "stages_passed": {
         "asset": true,
@@ -294,9 +194,135 @@
         "semantic": true
       },
       "terminal_state": "accepted",
-      "turns_used": 6,
+      "turns_used": 9,
       "variant": "loop",
-      "wall_seconds": 13.790167583007133
+      "wall_seconds": 25.091717458999483
+    },
+    {
+      "accepted": true,
+      "error": null,
+      "prompt_id": "industrial_yard",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/industrial_yard-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "camera": true,
+        "controller": true,
+        "materialization": true,
+        "navigation": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "accepted",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 9.17687341698911
+    },
+    {
+      "accepted": true,
+      "error": null,
+      "prompt_id": "industrial_yard",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/industrial_yard-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "camera": true,
+        "controller": true,
+        "materialization": true,
+        "navigation": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "accepted",
+      "turns_used": 10,
+      "variant": "loop",
+      "wall_seconds": 25.773417374992277
+    },
+    {
+      "accepted": true,
+      "error": null,
+      "prompt_id": "island_settlement",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/island_settlement-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "camera": true,
+        "controller": true,
+        "materialization": true,
+        "navigation": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "accepted",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 12.746463541989215
+    },
+    {
+      "accepted": true,
+      "error": null,
+      "prompt_id": "island_settlement",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/island_settlement-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "camera": true,
+        "controller": true,
+        "materialization": true,
+        "navigation": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "accepted",
+      "turns_used": 13,
+      "variant": "loop",
+      "wall_seconds": 33.051682707999134
+    },
+    {
+      "accepted": false,
+      "error": "runtime validation failed",
+      "prompt_id": "maze_garden",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/maze_garden-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "materialization": true,
+        "navigation": false,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 7.321591499989154
+    },
+    {
+      "accepted": false,
+      "error": "turn or wall budget exhausted",
+      "prompt_id": "maze_garden",
+      "run_dir": "runs/eval/20260802-065054-14e3ae07/maze_garden-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 16,
+      "variant": "loop",
+      "wall_seconds": 43.72856329099159
     }
   ]
 }

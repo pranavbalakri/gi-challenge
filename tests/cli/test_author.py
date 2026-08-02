@@ -1,0 +1,137 @@
+"""Agent-driven authoring session tests (keyless, Godot-free)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from envmaker.author import (
+    STARTER_TEMPLATE,
+    init_session,
+    read_session_prompt,
+    step_session,
+)
+from envmaker.cli import app
+
+_RUNNER = CliRunner()
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEMO_SOURCE = (_REPO_ROOT / "examples/demo/environment.py").read_text()
+
+
+class _HappyDriver:
+    """Duck-typed RuntimeDriver stub: everything succeeds."""
+
+    def __init__(self, run_dir: Path) -> None:
+        self._artifacts = run_dir / "runtime" / "artifacts"
+        self._artifacts.mkdir(parents=True, exist_ok=True)
+        self.closed = False
+
+    def load_candidate(self, candidate: object) -> None:
+        return None
+
+    def wait_navigation_ready(self, timeout: float = 30.0) -> bool:
+        return True
+
+    def connected_clear_ground_fraction(self, **kwargs: object) -> float:
+        return 0.95
+
+    def navigate(self, probe: object) -> object:
+        from envmaker.core.episode import EpisodeResult, TerminalReason
+
+        return EpisodeResult(
+            probe_fingerprint=probe.probe_fingerprint,  # type: ignore[attr-defined]
+            terminal_reason=TerminalReason.ARRIVED,
+            ticks_used=40,
+            final_geodesic_distance_m=0.2,
+            path_length_m=12.0,
+            collisions=0,
+            stuck_recoveries=0,
+        )
+
+    def render(self, view: str) -> object:
+        import hashlib
+
+        name = f"render-{view}.png"
+        data = b"\x89PNG\r\n" + view.encode() * 20
+        (self._artifacts / name).write_bytes(data)
+        return type(
+            "Ref",
+            (),
+            {
+                "path": f"artifacts/{name}",
+                "blake2b256": hashlib.blake2b(data, digest_size=32).hexdigest(),
+                "byte_count": len(data),
+            },
+        )()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_init_creates_session_layout(tmp_path: Path) -> None:
+    run_dir = tmp_path / "session"
+    init_session("a foggy hollow", 9, run_dir)
+    assert (run_dir / "environment.py").read_text() == STARTER_TEMPLATE
+    assert read_session_prompt(run_dir) == ("a foggy hollow", 9)
+    kinds = [
+        json.loads(line)["kind"]
+        for line in (run_dir / "runlog.jsonl").read_text().splitlines()
+    ]
+    assert kinds[:2] == ["system_prompt", "user_prompt"]
+
+
+def test_step_reports_template_and_static_failures(tmp_path: Path) -> None:
+    run_dir = tmp_path / "session"
+    init_session("hollow", 9, run_dir)
+    assert step_session(run_dir).status == "empty"
+
+    (run_dir / "environment.py").write_text(
+        "def build_environment():\n"
+        "    raise ValueError('boom')\n\n"
+        "environment = build_environment()\n"
+    )
+    outcome = step_session(run_dir)
+    assert outcome.status == "static_failed"
+    assert outcome.stages.get("program") is False
+    assert any("v1" in code for code, _m, _g in outcome.signals)
+
+
+def test_step_accepts_demo_fixture_with_stub_driver(tmp_path: Path) -> None:
+    run_dir = tmp_path / "session"
+    init_session("village green", 7, run_dir)
+    (run_dir / "environment.py").write_text(_DEMO_SOURCE)
+
+    drivers: list[_HappyDriver] = []
+
+    def _factory(rd: Path) -> _HappyDriver:
+        driver = _HappyDriver(rd)
+        drivers.append(driver)
+        return driver
+
+    outcome = step_session(run_dir, driver_factory=_factory)
+    assert outcome.status == "accepted", outcome.signals
+    assert all(outcome.stages.values()) and len(outcome.stages) == 9
+    assert outcome.definition_fingerprint
+    definition_file = run_dir / "environment-definition.json"
+    assert definition_file.is_file()
+    # Canonical envelope: {"canon": N, "payload": <definition>}.
+    payload = json.loads(definition_file.read_text())["payload"]
+    assert payload["program"]["provider"]["provider"] == "agent-driven"
+    assert len(outcome.renders) == 2
+    assert drivers and drivers[0].closed
+
+
+def test_author_cli_init_and_step(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("envmaker.cli._RUNS_ROOT", tmp_path)
+    result = _RUNNER.invoke(app, ["author", "init", "a mossy quarry", "--seed", "4"])
+    assert result.exit_code == 0
+    assert "AGENT-DRIVEN AUTHORING WORKFLOW" in result.output
+    assert "def build_environment() -> EnvironmentModel" in result.output
+    run_dirs = list(tmp_path.glob("author-*"))
+    assert len(run_dirs) == 1
+
+    step = _RUNNER.invoke(app, ["author", "step", str(run_dirs[0])])
+    assert step.exit_code == 1
+    assert "starter template" in step.output

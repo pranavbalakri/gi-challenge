@@ -553,12 +553,12 @@ def demo(
 def run(
     prompt: str = typer.Argument(..., help="Natural-language environment prompt."),
     seed: int = typer.Option(7, "--seed", help="Deterministic authoring seed."),
-    max_turns: int = typer.Option(12, "--max-turns", help="Provider turn budget."),
+    max_turns: int = typer.Option(16, "--max-turns", help="Provider turn budget."),
     wall_seconds: float = typer.Option(
         600.0, "--wall-seconds", help="Wall-clock budget seconds."
     ),
     model: str = typer.Option(
-        "gpt-4o-mini", "--model", help="OpenAI chat model name."
+        "gpt-5.4-mini", "--model", help="OpenAI chat model name."
     ),
     attempts: int = typer.Option(
         2,
@@ -631,6 +631,71 @@ def run(
         raise typer.Exit(1)
     except KeyboardInterrupt:
         raise typer.Exit(130) from None
+
+
+author_app = typer.Typer(help="Agent-driven authoring: your coding agent is the model.")
+app.add_typer(author_app, name="author")
+
+
+@author_app.command("init")
+def author_init(
+    prompt: str = typer.Argument(..., help="Natural-language environment prompt."),
+    seed: int = typer.Option(7, "--seed", help="Deterministic authoring seed."),
+) -> None:
+    """Create a session and print the agent instructions."""
+
+    from envmaker.author import agent_instructions, init_session
+
+    run_dir = _RUNS_ROOT / f"author-{new_run_id()}"
+    init_session(prompt, seed, run_dir)
+    typer.echo(agent_instructions())
+    typer.echo(f"\nrun_dir: {run_dir}")
+    typer.echo(f"program: {run_dir / 'environment.py'}")
+    typer.echo(f"next: uv run envmaker author step {run_dir}")
+
+
+@author_app.command("step")
+def author_step(
+    run_dir: _Path = typer.Argument(..., help="Session directory from `author init`."),
+) -> None:
+    """Validate the current environment.py end to end and report signals."""
+
+    from envmaker.author import step_session
+
+    outcome = step_session(run_dir)
+    if outcome.status == "empty":
+        typer.echo(
+            "environment.py is still the starter template — write the "
+            "program first (see the instructions from `author init`)."
+        )
+        raise typer.Exit(1)
+    for name, passed in outcome.stages.items():
+        typer.echo(f"{'PASS' if passed else 'FAIL'} {name}")
+    for code, message, guidance in outcome.signals:
+        typer.echo(f"signal {code}: {message}")
+        if guidance:
+            typer.echo(f"  guidance: {guidance}")
+    for render in outcome.renders:
+        typer.echo(f"render (open and LOOK at it): {render}")
+    if outcome.aesthetics:
+        typer.echo(f"aesthetics: {_json.dumps(outcome.aesthetics, sort_keys=True)[:400]}")
+    if outcome.status == "accepted":
+        typer.echo(f"definition: {run_dir / (outcome.definition_path or '')}")
+        typer.echo(f"definition_fingerprint: {outcome.definition_fingerprint}")
+        typer.echo("ACCEPTED — all nine stages passed and the definition is sealed.")
+        raise typer.Exit(0)
+    typer.echo(f"status: {outcome.status} — edit environment.py and re-run this step.")
+    raise typer.Exit(0)
+
+
+@author_app.command("open")
+def author_open(
+    run_dir: _Path = typer.Argument(..., help="Session directory from `author init`."),
+) -> None:
+    """Open the session's environment with a wandering agent."""
+
+    source = (run_dir / "environment.py").read_text(encoding="utf-8")
+    present_environment(source, run_dir)
 
 
 @app.command("check")

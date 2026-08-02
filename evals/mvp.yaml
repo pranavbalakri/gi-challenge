@@ -1,7 +1,7 @@
-model: gpt-4o-mini
+model: gpt-5.4-mini
 prompt_version: "1"
 budgets:
-  max_turns: 8
+  max_turns: 16
   wall_seconds: 600
   limits:
     cpu_seconds: 30.0

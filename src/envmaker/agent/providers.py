@@ -332,7 +332,7 @@ class OpenAIProvider:
 
     def __init__(
         self,
-        model_name: str = "gpt-4o-mini",
+        model_name: str = "gpt-5.4-mini",
         *,
         api_key: str | None = None,
         env_file: _Path | str | None = None,

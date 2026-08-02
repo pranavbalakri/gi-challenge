@@ -225,10 +225,24 @@ def _apply_unified_diff(source: str, patch: str) -> tuple[str | None, str]:
             return None, "insertion hunks require at least one context line"
 
         at = old_start - 1 + offset
-        if at < 0 or at + len(hunk_old) > len(working):
-            return None, "unified diff hunk mismatch"
-        if working[at : at + len(hunk_old)] != hunk_old:
-            return None, "unified diff hunk mismatch"
+        if (
+            at < 0
+            or at + len(hunk_old) > len(working)
+            or working[at : at + len(hunk_old)] != hunk_old
+        ):
+            # Models rarely count @@ line numbers correctly; locate the hunk
+            # by its exact context instead (must be unique — like git apply).
+            matches = [
+                i
+                for i in range(len(working) - len(hunk_old) + 1)
+                if working[i : i + len(hunk_old)] == hunk_old
+            ]
+            if len(matches) != 1:
+                return None, (
+                    "unified diff hunk mismatch (context not found exactly "
+                    "once; prefer the SEARCH/REPLACE format)"
+                )
+            at = matches[0]
         working[at : at + len(hunk_old)] = hunk_new
         offset += len(hunk_new) - len(hunk_old)
 
@@ -642,6 +656,11 @@ class ToolSurface:
     def patch_program(self, patch: str) -> PatchResult:
         """Apply a unified diff or search/replace patch without executing code."""
 
+        stripped = patch.strip()
+        if stripped.startswith("```") and stripped.endswith("```"):
+            # Models habitually fence their patches; unwrap one fence layer.
+            fence_lines = stripped.splitlines()
+            patch = "\n".join(fence_lines[1:-1])
         args = {"patch_bytes": len(patch.encode("utf-8")), "preview": patch[:200]}
         if not self.context.source.strip():
             result = PatchResult(

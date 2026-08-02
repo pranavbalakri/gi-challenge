@@ -1073,3 +1073,42 @@ def test_patch_thrashing_gets_full_program_nudge(tmp_path: Path) -> None:
         if json.loads(line)["kind"] == "nudge"
     ]
     assert "patch thrashing" in nudges
+
+
+def test_finish_backstop_nudges_simulate(tmp_path: Path) -> None:
+    import json
+
+    from envmaker.agent.providers import ProviderTurn, ScriptedProvider
+    from envmaker.core.program import ProviderInfo
+
+    demo_source = (_REPO_ROOT / "examples/demo/environment.py").read_text()
+    provider = ScriptedProvider(
+        [
+            ProviderTurn(code=demo_source),
+            ProviderTurn(tool="compile_environment"),
+            ProviderTurn(tool="read_program"),
+            ProviderTurn(tool="read_program"),
+        ],
+        descriptor=ProviderInfo(
+            provider="scripted", model_name="fixture", prompt_version="1"
+        ),
+    )
+    outcome = run_authoring(
+        "finish probe",
+        provider=provider,
+        seed=1,
+        max_turns=4,
+        wall_seconds=60.0,
+        run_dir=tmp_path,
+        driver_factory=lambda run_dir: (_ for _ in ()).throw(
+            AssertionError("driver must not start")
+        ),
+        limits=_LIMITS,
+    )
+    assert outcome.terminal_state in {"rejected_after_budget", "provider_error"}
+    nudges = [
+        json.loads(line)["payload"].get("reason")
+        for line in open(tmp_path / "runlog.jsonl")
+        if json.loads(line)["kind"] == "nudge"
+    ]
+    assert "finish now" in nudges

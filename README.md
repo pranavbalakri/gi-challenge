@@ -10,6 +10,12 @@ Worlds render as organic low-poly scenes — curved spline lanes, sphere-canopy 
 
 Running the harness can be done as described below, in Claude Code. I did it in the terminal.
 
+**Agent-driven mode (the Claude Code / Codex way):** the coding agent itself is the authoring model — no OpenAI key needed. Open your agent in the repo and tell it:
+
+> Author an environment with the envmaker harness: run `uv run envmaker author init "<your prompt>"`, follow the printed instructions, write `runs/<id>/environment.py` yourself, run `uv run envmaker author step <run_dir>` after each edit, open and look at the render PNGs it prints, and iterate until it prints ACCEPTED. Then show me with `uv run envmaker author open <run_dir>`.
+
+The harness validates (nine hard stages), simulates traversal, renders, and seals `environment-definition.json`; the agent does all the authoring and visual judgment with its own file tools and vision. (`envmaker run` remains the autonomous API-keyed mode; `demo` and `check` stay keyless.)
+
 **Requirements:** Python 3.12, [uv](https://docs.astral.sh/uv/), and a Godot 4.7.1 binary — either placed at `tools/godot/Godot.app` (kept local; not committed to git) or pointed to via `GODOT_BIN=<path>`. Developed and verified on macOS arm64; Linux is best-effort via `GODOT_BIN` (headless boxes need a virtual display such as `xvfb-run` for the windowed render capture); Windows is untested.
 
 ```bash
@@ -42,4 +48,4 @@ uv run envmaker check
 
 **Tests:** `uv run pytest -q` runs the full suite (the live-Godot tests skip themselves in sandboxed shells). The hard gate for the repair loop is the deterministic scripted two-repair fixture in `tests/agent/test_repair_loop.py` — spawn-in-blocker failure, patch, clear-ground connectivity failure, second patch, traversal, sealed definition — no API key required.
 
-**Evaluation:** six prompts × seed 7 × {one-shot, repair-loop} against `gpt-4o-mini`. One-shot accepted 0/6; the loop accepted 2/6 with the repairs visible in the traces. Full tables, failed examples, and limitations: [`evals/mvp-report.md`](evals/mvp-report.md).
+**Evaluation:** six prompts × seed 7 × {one-shot, repair-loop} against `gpt-5.4-mini` (16-turn budget; the loop's workflow includes a mandatory screenshot self-audit). One-shot accepted 3/6, the loop 4/6 — and the loop's wins include the hard prompts one-shot never solves (`frozen_village`, `desert_canyon`), with every repair visible in the traces. Full tables, failed examples, and limitations: [`evals/mvp-report.md`](evals/mvp-report.md).

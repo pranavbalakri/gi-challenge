@@ -644,6 +644,38 @@ def run_authoring(
                 )
                 messages.append({"role": "user", "content": nudge})
                 runlog.append("nudge", {"turn": turns_used, "reason": "empty source"})
+            else:
+                # Finish backstop: perfection-looping on audits/patches must
+                # not starve the run of its sealing simulate.
+                static_now = context.static
+                static_clean_now = (
+                    static_now is not None
+                    and static_now.model is not None
+                    and bool(static_now.reports)
+                    and all(report.passed for report in static_now.reports)
+                )
+                runtime_clean_now = bool(context.runtime_reports) and all(
+                    report.passed for report in context.runtime_reports
+                )
+                if (
+                    max_turns - turns_used <= 2
+                    and tool_name != "simulate_navigation"
+                    and static_clean_now
+                    and not runtime_clean_now
+                ):
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Budget nearly exhausted. Call "
+                                "simulate_navigation NOW to finish and seal."
+                            ),
+                        }
+                    )
+                    runlog.append(
+                        "nudge",
+                        {"turn": turns_used, "reason": "finish now"},
+                    )
             _trim_messages(messages)
 
             if tool_name == "simulate_navigation" and result.get("ok"):
