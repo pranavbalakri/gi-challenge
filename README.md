@@ -1,56 +1,62 @@
-# gi-challenge
+# EnvMaker
 
-Hi! This contains my submission to the challenge. 
+Hi! This is my submission to the challenge. EnvMaker turns a text prompt ("a stone courtyard with a banner at the east gate") into a playable, validated Godot world that an agent walks through.
 
-Overall, it constructs an isometrically-displayed 2D environment (sort of like Hades) that an agent can move through, running on Godot. There is an SDK containing objects/materials and the harness allows the ability to generate custom assets. I was inspired by [Articraft](https://arxiv.org/html/2605.15187v1#S3)'s SDK. The harness returns structured runtime feedback, and iteratively repairs the program until the environment is valid and navigable.
+Environments render as organic 2D low-poly isometric scenes (think Hades-style camera).
 
-Worlds render as organic low-poly scenes — curved spline lanes, sphere-canopy oaks and conical pines, boulders, and rolling backdrop hills under a material-derived sky. The model places things deliberately (`prop()`, opt-in scatter variation) and can audit screenshots of its own world mid-loop (`audit_render`) to improve the composition before sealing.
+The authoring model writes a small Python program against an SDK containing parametric kits, 2D footprint geometry, and certain props. This method was inspired by by [Articraft](https://arxiv.org/html/2605.15187v1#S3), a harness for generating 3D models that used a similar SDK. 
 
-#### Running It
+Here is a small system diagram:
 
-Running the harness can be done as described below, in Claude Code. I did it in the terminal.
+```mermaid
+flowchart TD
+    Prompt["Text command"] --> Agent["Authoring agent (bounded loop)"]
+    Agent --> Program["environment.py (SDK-only)"]
+    Program --> Worker["Fault-contained worker"]
+    Worker --> Model["Immutable EnvironmentModel"]
+    Model --> Compile["SDK compiler"]
+    Compile --> Candidate["CandidateScene + ArtifactManifest"]
+    Candidate --> Runner["Godot 4.7.1 (bridge)"]
+    Runner --> Validate["Hard validators (9 stages)"]
+    Runner --> Render["Isometric + top-down renders"]
+    Validate --> Feedback["Typed Signals: code, message, IDs, measurements, guidance"]
+    Feedback -.repair.-> Agent
+    Validate -->|"all pass"| Definition["Sealed EnvironmentDefinition"]
+    Definition --> Traverse["Automated traversal (NavigationAgent3D episode)"]
+    Traverse --> Evidence["EpisodeResult + renders + full trace"]
+```
 
-**Agent-driven mode (the Claude Code / Codex way):** the coding agent itself is the authoring model — no OpenAI key needed. Open your agent in the repo and tell it:
 
-> Author an environment with the envmaker harness: run `uv run envmaker author init "<your prompt>"`, follow the printed instructions, write `runs/<id>/environment.py` yourself, run `uv run envmaker author step <run_dir>` after each edit, open and look at the render PNGs it prints, and iterate until it prints ACCEPTED. Then show me with `uv run envmaker author open <run_dir>`.
 
-The harness validates (nine hard stages), simulates traversal, renders, and seals `environment-definition.json`; the agent does all the authoring and visual judgment with its own file tools and vision. (`envmaker run` remains the autonomous API-keyed mode; `demo` and `check` stay keyless.)
 
-**Requirements:** Python 3.12 and [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`). Godot 4.7.1 is fetched by a script — a fresh clone needs no pre-installed Godot. Developed and verified on macOS arm64; the fetch script also serves Linux x86_64/arm64 and Windows (headless Linux boxes need a virtual display such as `xvfb-run` for the windowed render capture). If you already have Godot 4.7.1, set `GODOT_BIN=<path>` instead.
+
+## Running it in Claude Code
+
+No API key and no manual setup. Clone the repo, start Claude Code at the repo root, and ask in plain English:
+
+> Use the envmaker harness to create an environment that consists of a green field with several scattered boulders.
+
+Claude picks up the workflow from `CLAUDE.md` automatically. It installs dependencies, downloads the pinned Godot build if it's missing, writes the environment program itself, runs the validators, looks at the renders, repairs until every check passes, and then opens the finished world in a window with the agent wandering around it. Claude is the authoring model here; the harness never calls an external API. 
+
+## Running it in the Terminal
+
+Python 3.12 and [uv](https://docs.astral.sh/uv/) are the only prerequisites; a script fetches the pinned Godot 4.7.1 build (macOS verified; Linux x86_64/arm64 and Windows served by the same script, or set `GODOT_BIN=<path>` to use your own binary).
 
 ```bash
 uv sync
-uv run python scripts/get_godot.py          # downloads the pinned Godot 4.7.1 for this platform
-uv run python scripts/verify_toolchain.py   # verifies the Python + Godot pins
+uv run python scripts/get_godot.py
 ```
-
-(Claude Code and Codex read `CLAUDE.md` / `AGENTS.md` automatically, which contain these same setup steps plus the authoring workflow — so "clone and run `claude`" is enough.)
-
-**The four commands:**
 
 ```bash
-# 1. Keyless demo: runs the checked-in fixture (examples/demo/environment.py)
-#    through all nine hard validators, navigates to the landmark, captures renders.
-uv run envmaker demo --headless
-# -> nine "PASS <stage>" lines, render paths, and run_dir: runs/<id>/
-
-# 2. Same, but with a visible Godot window that plays the traversal.
+# Validate the checked-in fixture end to end and watch it run.
 uv run envmaker demo --view
 
-# 3. Live authoring (needs OPENAI_API_KEY in .env): generates environment.py from
-#    the prompt, streams compile/repair events, and preserves every attempt.
-uv run envmaker run "a frozen village with a walled square and a watchtower" --seed 7
-# -> exit 0 for accepted | rejected_after_budget; nonzero only for system failures
-
-# 4. Keyless contract suite: pytest (non-recursive), the Godot in-engine harness,
-#    and the headless demo, aggregated into three PASS/FAIL lines.
+# Keyless contract suite: pytest, the Godot in-engine harness, and the demo.
 uv run envmaker check
+
+# Autonomous authoring loop (needs OPENAI_API_KEY in .env);
+# --open shows the accepted world when it finishes.
+uv run envmaker run "a frozen village with a walled square and a watchtower" --open
 ```
 
-Validation runs (every `author step`, `run` attempt, and the headless demo) keep their Godot process minimized — nothing pops onto your screen. A visible window opens only for presentation: `demo --view`, `author open`, and `run --open`.
-
-**What a run leaves behind** (`runs/<id>/`): `runlog.jsonl` (redacted event trace), `revisions/rev-N.py` (every source revision), `runtime/artifacts/*.png` (content-addressed isometric + top-down renders), and — only on acceptance — `environment-definition.json`, the sealed, canonically fingerprinted definition.
-
-**Tests:** `uv run pytest -q` runs the full suite (the live-Godot tests skip themselves in sandboxed shells). The hard gate for the repair loop is the deterministic scripted two-repair fixture in `tests/agent/test_repair_loop.py` — spawn-in-blocker failure, patch, clear-ground connectivity failure, second patch, traversal, sealed definition — no API key required.
-
-**Evaluation:** six prompts × seed 7 × {one-shot, repair-loop} against `gpt-5.4-mini` (16-turn budget; the loop's workflow includes a mandatory screenshot self-audit). One-shot accepted 3/6, the loop 4/6 — and the loop's wins include the hard prompts one-shot never solves (`frozen_village`, `desert_canyon`), with every repair visible in the traces. Full tables, failed examples, and limitations: [`evals/mvp-report.md`](evals/mvp-report.md).
+Validation runs keep their Godot process minimized, so nothing pops onto your screen; a window only opens for `--view` and `--open`. Every run leaves `runs/<id>/` with the event trace (`runlog.jsonl`), each source revision, the renders, and, on acceptance, the sealed `environment-definition.json`. `uv run pytest -q` runs the full test suite. Evaluation results across six prompts (one-shot vs. repair loop): `[evals/mvp-report.md](evals/mvp-report.md)`.

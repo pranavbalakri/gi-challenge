@@ -6,6 +6,7 @@ plan.md
 __pycache__/
 .pytest_cache/
 .venv/
+documents/
 runs/
 tools/godot/
 .godot/
