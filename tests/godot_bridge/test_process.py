@@ -72,7 +72,9 @@ if all((host, port, session, token)):
 def test_env_sanitized_and_token_not_in_argv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("ENVMAKER_TEST_SECRET", "leakme")
+    monkeypatch.setenv("OTHER_TEST_SECRET", "leakme")
+    monkeypatch.setenv("ENVMAKER_ISO_PITCH", "65")
+    monkeypatch.setenv("ENVMAKER_BRIDGE_TOKEN", "spoofed-token")
     child = _write_child(
         tmp_path,
         """\
@@ -82,7 +84,8 @@ import sys
 
 print(json.dumps({
     "argv": sys.argv,
-    "secret": os.environ.get("ENVMAKER_TEST_SECRET"),
+    "secret": os.environ.get("OTHER_TEST_SECRET"),
+    "pitch": os.environ.get("ENVMAKER_ISO_PITCH"),
     "token": os.environ.get("ENVMAKER_BRIDGE_TOKEN"),
 }))
 """,
@@ -102,8 +105,9 @@ print(json.dumps({
     assert process.wait_closed(10.0) == 0
 
     payload = json.loads(process.stdout_path.read_text())
-    assert payload["secret"] is None
-    assert payload["token"] == token
+    assert payload["secret"] is None, "non-ENVMAKER vars must be stripped"
+    assert payload["pitch"] == "65", "ENVMAKER_* knobs must pass through"
+    assert payload["token"] == token, "bridge vars must not be spoofable"
     assert all(token not in arg for arg in payload["argv"])
 
 

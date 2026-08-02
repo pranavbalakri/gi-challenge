@@ -13,6 +13,7 @@ _BUILDER_METHODS = (
     "obstacle",
     "structure",
     "landmark",
+    "prop",
     "scatter",
     "spawn",
     "camera",
@@ -24,6 +25,7 @@ _TOOL_NAMES = (
     "compile_environment",
     "probe_environment",
     "render_environment",
+    "audit_render",
     "simulate_navigation",
 )
 
@@ -38,6 +40,15 @@ def test_system_prompt_contract_and_budget() -> None:
         assert name in SYSTEM_PROMPT
     for name in _TOOL_NAMES:
         assert name in SYSTEM_PROMPT
+    assert 'probe_environment("aesthetics")' in SYSTEM_PROMPT or '"aesthetics"' in SYSTEM_PROMPT
+    assert "COMPOSITION" in SYSTEM_PROMPT
+    assert "audit_render" in SYSTEM_PROMPT
+    assert "BEFORE the final simulate_navigation" in SYSTEM_PROMPT
+    assert "yaw_jitter" in SYSTEM_PROMPT
+    assert "scale_range" in SYSTEM_PROMPT
+    assert "pine/vegetation/true (conical tree)" in SYSTEM_PROMPT
+    assert "oak/vegetation/true (round canopy tree)" in SYSTEM_PROMPT
+    assert "boulder/vegetation/true (rock cluster)" in SYSTEM_PROMPT
     assert len(SYSTEM_PROMPT) <= 6000
 
 

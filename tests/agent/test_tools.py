@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
-from envmaker.agent.tools import ToolContext, ToolSurface
+from envmaker.agent.tools import AuditResult, ToolContext, ToolSurface, _AUDIT_B64_CAP
 from envmaker.core.artifacts import ArtifactManifest, ArtifactRef
 from envmaker.core.definition import HardStage
 from envmaker.core.episode import (
@@ -107,6 +109,60 @@ class _HappyDriver:
             path=f"renders/{view}.png",
             media_type="image/png",
             byte_count=256,
+            blake2b256=digest,
+            sha256=digest,
+            producer="stub",
+            toolchain_version="test",
+        )
+
+
+def _write_tiny_png(path: Path, *, color: tuple[int, int, int] = (40, 120, 80)) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (32, 24), color).save(path, format="PNG")
+    return path.stat().st_size
+
+
+class _PngAuditDriver:
+    """Stub driver that writes real small PNGs for audit_render."""
+
+    def __init__(self, run_dir: Path) -> None:
+        self._run_dir = run_dir
+        self.loaded = False
+
+    def load_candidate(self, candidate: object) -> SimpleNamespace:
+        del candidate
+        self.loaded = True
+        return SimpleNamespace(ok=True)
+
+    def wait_navigation_ready(self, timeout: float = 30.0) -> None:
+        return None
+
+    def connected_clear_ground_fraction(self) -> float:
+        return 0.9
+
+    def navigate(self, probe: NavigationProbe) -> EpisodeResult:
+        return EpisodeResult(
+            probe_fingerprint=probe.probe_fingerprint,
+            terminal_reason=TerminalReason.ARRIVED,
+            ticks_used=20,
+            final_geodesic_distance_m=0.2,
+            path_length_m=12.0,
+            collisions=0,
+            stuck_recoveries=0,
+        )
+
+    def render(self, view: str) -> ArtifactRef:
+        rel = f"renders/{view}.png"
+        abs_path = self._run_dir / rel
+        byte_count = _write_tiny_png(
+            abs_path,
+            color=(80, 40, 120) if view == "isometric" else (40, 120, 80),
+        )
+        digest = hashlib.sha256(abs_path.read_bytes()).hexdigest()
+        return ArtifactRef(
+            path=rel,
+            media_type="image/png",
+            byte_count=byte_count,
             blake2b256=digest,
             sha256=digest,
             producer="stub",
@@ -214,9 +270,15 @@ def test_probe_queries_and_errors(tmp_path: Path) -> None:
     assert route.ok is True
     assert "distance" in route.data
 
+    aesthetics = tools.probe_environment("aesthetics")
+    assert aesthetics.ok is True
+    assert "cluster_score" in aesthetics.data
+    assert "instance_count" in aesthetics.data
+
     unknown = tools.probe_environment("wat")
     assert unknown.ok is False
     assert "component" in unknown.reason
+    assert "aesthetics" in unknown.reason
 
 
 def test_render_and_simulate_with_stub_driver(tmp_path: Path) -> None:
@@ -244,6 +306,47 @@ def test_render_and_simulate_without_driver(tmp_path: Path) -> None:
     nav = tools.simulate_navigation()
     assert nav.ok is False
     assert "driver unavailable" in nav.reason.lower()
+
+
+def test_audit_render_happy_path(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    driver = _PngAuditDriver(run_dir)
+    tools = _surface(tmp_path, driver=driver, probe=_probe())
+    assert tools.compile_environment().ok is True
+    result = tools.audit_render()
+    assert isinstance(result, AuditResult)
+    assert result.ok is True
+    assert driver.loaded is True
+    assert len(result.refs) == 2
+    assert len(result.images_b64) == 2
+    assert all(len(item.encode("utf-8")) <= _AUDIT_B64_CAP for item in result.images_b64)
+    for key in (
+        "instance_count",
+        "cluster_score",
+        "coverage_fraction",
+        "sightline_clear",
+        "guidance",
+    ):
+        assert key in result.aesthetics
+
+
+def test_audit_render_budget_exhausted(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    tools = _surface(tmp_path, driver=_PngAuditDriver(run_dir), probe=_probe())
+    assert tools.compile_environment().ok is True
+    assert tools.audit_render().ok is True
+    assert tools.audit_render().ok is True
+    third = tools.audit_render()
+    assert third.ok is False
+    assert "audit budget exhausted" in third.reason
+
+
+def test_audit_render_without_driver(tmp_path: Path) -> None:
+    tools = _surface(tmp_path)
+    assert tools.compile_environment().ok is True
+    result = tools.audit_render()
+    assert result.ok is False
+    assert "driver unavailable" in result.reason.lower()
 
 
 def test_every_tool_call_is_logged_with_redaction(tmp_path: Path) -> None:
@@ -438,3 +541,147 @@ def test_rotated_blocker_route_ignores_aabb_corner_only(tmp_path: Path) -> None:
     route = tools.probe_environment("route 1.3 1.3 1.4 1.35")
     assert route.ok is True
     assert "diamond" not in route.data["blockers_intersected"]
+
+
+def _aesthetics_source(*, clumpy: bool, blocked: bool) -> str:
+    props = []
+    if clumpy:
+        spots = [
+            (0.0, 0.0),
+            (0.4, 0.0),
+            (0.0, 0.4),
+            (0.4, 0.4),
+            (0.2, 0.2),
+            (0.1, 0.3),
+            (8.0, 8.0),
+            (-8.0, -8.0),
+        ]
+    else:
+        spots = [
+            (-9.0, -9.0),
+            (-9.0, 0.0),
+            (-9.0, 9.0),
+            (0.0, -9.0),
+            (0.0, 9.0),
+            (9.0, -9.0),
+            (9.0, 0.0),
+            (9.0, 9.0),
+        ]
+    for index, (x, z) in enumerate(spots):
+        props.append(
+            f'    b.prop("bush_{index}", kit="shrub", position=({x}, {z}))\n'
+        )
+    wall = ""
+    if blocked:
+        wall = (
+            '    b.wall("gate", start=(-1.0, 4.0), end=(1.0, 4.0), '
+            "height=2.0, thickness=0.5, material=\"stone\")\n"
+        )
+    return (
+        "from envmaker.sdk import EnvironmentBuilder, Polygon2D\n\n"
+        "def build_environment():\n"
+        '    b = EnvironmentBuilder("aesthetics", seed=3)\n'
+        '    b.ground("field", footprint=Polygon2D('
+        "[(-12,-12),(12,-12),(12,12),(-12,12)]), material=\"grass\")\n"
+        f"{wall}"
+        '    b.landmark("goal", position=(0.0, 9.0), kit="obelisk")\n'
+        + "".join(props)
+        + '    b.spawn("hero", position=(0.0, -9.0))\n'
+        "    b.camera(orthographic_size=20.0)\n"
+        "    return b.freeze()\n\n"
+        "environment = build_environment()\n"
+    )
+
+
+def test_aesthetics_cluster_and_sightline(tmp_path: Path) -> None:
+    clumpy = _surface(tmp_path, source=_aesthetics_source(clumpy=True, blocked=False))
+    assert clumpy.compile_environment().ok is True
+    clumpy_probe = clumpy.probe_environment("aesthetics")
+    assert clumpy_probe.ok is True
+    assert clumpy_probe.data["instance_count"] == 8
+    assert float(clumpy_probe.data["cluster_score"]) > 0.6
+
+    even = _surface(tmp_path, source=_aesthetics_source(clumpy=False, blocked=False))
+    assert even.compile_environment().ok is True
+    even_probe = even.probe_environment("aesthetics")
+    assert even_probe.ok is True
+    assert float(even_probe.data["cluster_score"]) < 0.35
+    assert even_probe.data["sightline_clear"] is True
+    assert even_probe.data["sightline_blocker"] is None
+
+    blocked = _surface(tmp_path, source=_aesthetics_source(clumpy=False, blocked=True))
+    assert blocked.compile_environment().ok is True
+    blocked_probe = blocked.probe_environment("aesthetics")
+    assert blocked_probe.ok is True
+    assert blocked_probe.data["sightline_clear"] is False
+    assert blocked_probe.data["sightline_blocker"]
+    assert any("sightline" in tip for tip in blocked_probe.data["guidance"])
+
+
+def test_aesthetics_requires_compile(tmp_path: Path) -> None:
+    tools = _surface(tmp_path)
+    before = tools.probe_environment("aesthetics")
+    assert before.ok is False
+    assert "compile" in before.reason.lower()
+
+
+def test_audit_resolves_runtime_subdir_and_waits_for_nav(tmp_path):
+    from PIL import Image
+
+    from envmaker.agent.tools import ToolContext, ToolSurface
+    from envmaker.core.program import ResourceLimits
+    from envmaker.runlog import RunLog
+    from envmaker.validation import validate_static
+
+    demo_source = (
+        Path(__file__).resolve().parents[2] / "examples/demo/environment.py"
+    ).read_text()
+    context = ToolContext(
+        source=demo_source,
+        limits=ResourceLimits(
+            cpu_seconds=10, memory_mb=512, output_bytes=262144, wall_seconds=20
+        ),
+        run_dir=tmp_path,
+        runlog=RunLog(tmp_path / "runlog.jsonl"),
+    )
+    surface = ToolSurface(context)
+    assert surface.compile_environment().ok
+
+    artifacts_dir = tmp_path / "runtime" / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    calls: list[str] = []
+
+    class _Driver:
+        def load_candidate(self, candidate):
+            calls.append("load")
+            return None
+
+        def wait_navigation_ready(self, timeout):
+            calls.append("wait")
+            return True
+
+        def render(self, view):
+            name = f"render-{view}.png"
+            Image.new("RGB", (64, 64), (90, 140, 80)).save(
+                artifacts_dir / name
+            )
+            data = (artifacts_dir / name).read_bytes()
+            import hashlib
+
+            return type(
+                "Ref",
+                (),
+                {
+                    "path": f"artifacts/{name}",
+                    "blake2b256": hashlib.blake2b(
+                        data, digest_size=32
+                    ).hexdigest(),
+                    "byte_count": len(data),
+                },
+            )()
+
+    context.driver = _Driver()
+    result = surface.audit_render()
+    assert result.ok, result.reason
+    assert calls[:2] == ["load", "wait"], "must settle nav before rendering"
+    assert len(result.images_b64) == 2

@@ -49,10 +49,13 @@ _TOOL_METHODS = frozenset(
         "compile_environment",
         "probe_environment",
         "render_environment",
+        "audit_render",
         "simulate_navigation",
     }
 )
-_DRIVER_TOOLS = frozenset({"render_environment", "simulate_navigation"})
+_DRIVER_TOOLS = frozenset(
+    {"render_environment", "audit_render", "simulate_navigation"}
+)
 
 
 class AuthoringOutcome(_BaseModel):
@@ -82,8 +85,21 @@ def _bound_json(payload: object) -> str:
     return text.encode("utf-8")[:_RESULT_BYTES].decode("utf-8", errors="ignore")
 
 
+def _is_image_message(message: dict[str, object]) -> bool:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(part, dict) and part.get("type") == "image_url"
+        for part in content
+    )
+
+
 def _is_tool_exchange(message: dict[str, object]) -> bool:
     content = message.get("content")
+    if isinstance(content, list):
+        # Multimodal audit TOOL_RESULT observations count as tool exchanges.
+        return message.get("role") == "user"
     if not isinstance(content, str):
         return False
     if message.get("role") == "assistant" and content.startswith("TOOL_CALL "):
@@ -97,14 +113,26 @@ def _is_tool_exchange(message: dict[str, object]) -> bool:
     return False
 
 
+def _evict_prior_image_messages(messages: list[dict[str, object]]) -> None:
+    """Keep at most one image-bearing message in the transcript."""
+
+    image_indices = [
+        index for index, message in enumerate(messages) if _is_image_message(message)
+    ]
+    for index in reversed(image_indices[:-1]):
+        messages.pop(index)
+
+
 def _trim_messages(messages: list[dict[str, object]]) -> None:
     """Drop oldest tool exchanges first; never the system or task prompts.
 
     Rationale: dropping only TOOL_RESULT entries would starve the context of
     feedback while info-free TOOL_CALL stubs accumulated, and the fallback
-    would eventually evict the task prompt itself.
+    would eventually evict the task prompt itself. Content-array audit
+    observations count as tool exchanges; at most one image message is kept.
     """
 
+    _evict_prior_image_messages(messages)
     while len(messages) > _MESSAGE_CAP:
         drop_at = None
         # Indices 0 (system prompt) and 1 (task prompt) are pinned.
@@ -121,6 +149,7 @@ def _trim_messages(messages: list[dict[str, object]]) -> None:
         if drop_at is None:
             break
         messages.pop(drop_at)
+        _evict_prior_image_messages(messages)
 
 
 def _default_driver_factory(run_dir: _Path) -> object:
@@ -231,6 +260,8 @@ def _dispatch_tool(
         return _result_payload(method(str(args.get("query", ""))))
     if name == "render_environment":
         return _result_payload(method(str(args.get("view", ""))))
+    if name == "audit_render":
+        return _result_payload(method())
     if name == "simulate_navigation":
         return _result_payload(method())
     return {"ok": False, "reason": f"unknown tool: {name}", "error": "tool_error"}
@@ -360,6 +391,7 @@ def run_authoring(
     surface = _ToolSurface(context)
     driver: object | None = None
     turns_used = 0
+    consecutive_failed_patches = 0
     started = _monotonic()
 
     user_prompt = _build_user_prompt(prompt, seed)
@@ -441,9 +473,8 @@ def run_authoring(
                         "nudge", {"turn": turns_used, "reason": "empty reply"}
                     )
                 else:
-                    # Narration instead of action: a compiled-clean program
-                    # that was never (re)simulated cannot be accepted, so tell
-                    # the model exactly which tool advances the run.
+                    # Text instead of action never advances the run; tell the
+                    # model exactly what does, based on pipeline state.
                     static = context.static
                     static_clean = (
                         static is not None
@@ -460,13 +491,20 @@ def run_authoring(
                             "believe the program is ready, call "
                             "simulate_navigation now."
                         )
-                        messages.append(
-                            {"role": "user", "content": action_nudge}
+                        reason = "narration"
+                    else:
+                        action_nudge = (
+                            "That reply was plain text, not an action. Typed "
+                            "TOOL_CALL lines do nothing. Either make a real "
+                            "tool call, or send the complete corrected "
+                            "program in one ```python fenced block."
                         )
-                        runlog.append(
-                            "nudge",
-                            {"turn": turns_used, "reason": "narration"},
-                        )
+                        reason = "text while static failing"
+                    messages.append({"role": "user", "content": action_nudge})
+                    runlog.append(
+                        "nudge",
+                        {"turn": turns_used, "reason": reason},
+                    )
                 _trim_messages(messages)
                 continue
 
@@ -489,6 +527,24 @@ def run_authoring(
 
             if tool_name == "patch_program" and result.get("ok"):
                 _save_revision(context, revision_dir)
+                consecutive_failed_patches = 0
+            elif tool_name == "patch_program":
+                consecutive_failed_patches += 1
+                if consecutive_failed_patches == 2:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Two patches in a row were rejected. Stop "
+                                "patching: resend the COMPLETE corrected "
+                                "program in one ```python fenced block."
+                            ),
+                        }
+                    )
+                    runlog.append(
+                        "nudge",
+                        {"turn": turns_used, "reason": "patch thrashing"},
+                    )
             if tool_name == "compile_environment":
                 _ensure_probe(context)
 
@@ -515,6 +571,19 @@ def run_authoring(
                     },
                 )
 
+            log_result: dict[str, object] = result
+            if tool_name == "audit_render":
+                # Never put image bytes / base64 through the runlog.
+                images = result.get("images_b64") or ()
+                log_result = {
+                    "ok": result.get("ok"),
+                    "refs": list(result.get("refs") or ()),
+                    "byte_sizes": [
+                        len(str(item).encode("utf-8")) for item in images
+                    ],
+                    "aesthetics": result.get("aesthetics") or {},
+                    "reason": result.get("reason", ""),
+                }
             tool_payload = {
                 "name": tool_name,
                 "args": tool_args,
@@ -524,7 +593,7 @@ def run_authoring(
                 "reason": result.get("reason", ""),
                 "signal_codes": codes,
                 "signal_messages": messages_text[:2000],
-                "result": result,
+                "result": log_result,
             }
             # The full result already rides on tool_call.payload.result; a
             # separate tool_result event would duplicate it with no consumer.
@@ -538,12 +607,36 @@ def run_authoring(
             )
             # Rendered as a user-side observation: OpenAI reserves role "tool"
             # for native tool_calls pairing, which this transcript does not use.
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"TOOL_RESULT {tool_name} {_bound_json(result)}",
-                }
-            )
+            # Successful audits become multimodal content arrays (images + text).
+            if tool_name == "audit_render" and result.get("ok"):
+                aesthetics_text = _bound_json(result.get("aesthetics") or {})
+                content_parts: list[dict[str, object]] = [
+                    {
+                        "type": "text",
+                        "text": (
+                            "AUDIT_RENDER result (isometric, topdown) + "
+                            f"aesthetics: {aesthetics_text}"
+                        ),
+                    }
+                ]
+                for image_b64 in result.get("images_b64") or ():
+                    content_parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_b64}",
+                            },
+                        }
+                    )
+                messages.append({"role": "user", "content": content_parts})
+                _evict_prior_image_messages(messages)
+            else:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"TOOL_RESULT {tool_name} {_bound_json(result)}",
+                    }
+                )
             if not context.source.strip():
                 nudge = (
                     "NO PROGRAM EXISTS YET. Do not call tools. Reply with the "

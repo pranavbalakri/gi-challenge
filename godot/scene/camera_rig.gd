@@ -92,10 +92,16 @@ func _process(_delta: float) -> void:
 func capture(path: String) -> Dictionary:
 	if RenderingServer.get_video_adapter_name().is_empty():
 		return {"ok": false, "error": "rendering unavailable"}
-	for i: int in range(2):
-		await get_tree().process_frame
-	RenderingServer.force_draw()
-	var image: Image = _viewport.get_texture().get_image()
+	var image: Image = null
+	# Two attempts: under machine load the first draw after a frame await can
+	# miss the readback window (observed once as a full-suite flake).
+	for attempt: int in range(2):
+		for i: int in range(2):
+			await get_tree().process_frame
+		RenderingServer.force_draw()
+		image = _viewport.get_texture().get_image()
+		if image != null:
+			break
 	if image == null:
 		return {"ok": false, "error": "rendering unavailable"}
 	if image.save_png(path) != OK:

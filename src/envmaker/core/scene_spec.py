@@ -29,6 +29,8 @@ __all__ = [
     "BoxVisual",
     "CylinderVisual",
     "PlaneVisual",
+    "SphereVisual",
+    "RibbonVisual",
     "PrimitiveVisual",
     "SceneNode",
     "GodotSceneSpec",
@@ -102,13 +104,24 @@ class BoxVisual(_BaseModel):
 
 
 class CylinderVisual(_BaseModel):
-    """A cylinder primitive visual."""
+    """A cylinder primitive visual.
+
+    Optional ``top_radius`` enables cones (0) and truncated cones; omitted
+    means equal to ``radius`` (a plain cylinder). Omitted None is fingerprint-
+    stable via omit_when_none.
+    """
 
     model_config = _ConfigDict(frozen=True, extra="forbid")
 
     shape: _Literal["cylinder"] = "cylinder"
     radius: float = _Field(gt=0, allow_inf_nan=False)
     height: float = _Field(gt=0, allow_inf_nan=False)
+    top_radius: float | None = _Field(
+        default=None,
+        ge=0,
+        allow_inf_nan=False,
+        json_schema_extra={"omit_when_none": True},
+    )
     material: str = "default"
 
 
@@ -123,8 +136,41 @@ class PlaneVisual(_BaseModel):
     material: str = "default"
 
 
+class SphereVisual(_BaseModel):
+    """A sphere primitive visual."""
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    shape: _Literal["sphere"] = "sphere"
+    radius: float = _Field(gt=0, allow_inf_nan=False)
+    material: str = "default"
+
+
+class RibbonVisual(_BaseModel):
+    """A flat ribbon path visual through XZ points.
+
+    Visual-only by doctrine: the compiler never pairs a ribbon with a collider.
+    """
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    shape: _Literal["ribbon"] = "ribbon"
+    points: tuple[tuple[float, float], ...]
+    width: float = _Field(gt=0, allow_inf_nan=False)
+    material: str = "default"
+
+    @_model_validator(mode="after")
+    def _validate_points(self) -> RibbonVisual:
+        if len(self.points) < 2:
+            raise ValueError("points must contain at least 2 entries")
+        for point in self.points:
+            if any(not _math.isfinite(component) for component in point):
+                raise ValueError("point components must be finite")
+        return self
+
+
 PrimitiveVisual = _Annotated[
-    BoxVisual | CylinderVisual | PlaneVisual,
+    BoxVisual | CylinderVisual | PlaneVisual | SphereVisual | RibbonVisual,
     _Field(discriminator="shape"),
 ]
 

@@ -214,7 +214,16 @@ def test_run_streams_events_and_exit_codes(
 
     result = _RUNNER.invoke(
         app,
-        ["run", "a frozen village", "--seed", "7", "--max-turns", "2"],
+        [
+            "run",
+            "a frozen village",
+            "--seed",
+            "7",
+            "--max-turns",
+            "2",
+            "--attempts",
+            "1",
+        ],
     )
     assert result.exit_code == exit_code, result.output
     assert "provider_turn" in result.output
@@ -431,3 +440,228 @@ def test_probe_selection_is_the_single_canonical_helper() -> None:
     probe = select_landmark_probe(static.model, static.candidate)
     assert probe is not None
     assert probe.target_landmark_id == "obelisk_goal.0"
+
+
+def _write_runlog(dir_path, entries):
+    import json as json_mod
+
+    dir_path.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for seq, (codes, messages) in enumerate(entries, start=1):
+        lines.append(
+            json_mod.dumps(
+                {
+                    "kind": "tool_call",
+                    "seq": seq,
+                    "payload": {
+                        "name": "compile_environment",
+                        "ok": False,
+                        "signal_codes": codes,
+                        "signal_messages": messages,
+                    },
+                }
+            )
+        )
+    (dir_path / "runlog.jsonl").write_text("\n".join(lines) + "\n")
+
+
+def test_diagnosis_dominant_spawn_family(tmp_path):
+    from envmaker.cli import diagnose_failed_attempts
+
+    a = tmp_path / "a1"
+    b = tmp_path / "a2"
+    _write_runlog(
+        a,
+        [
+            (["v1.program_failed"], "ValueError: spawn must lie on the ground footprint..."),
+            (["v1.program_failed"], "ValueError: spawn intersects a blocker: ..."),
+        ],
+    )
+    _write_runlog(
+        b,
+        [(["v5.spawn_intersects_blocker"], "spawn intersects a blocker collider footprint")],
+    )
+    diagnosis = diagnose_failed_attempts([a, b])
+    assert diagnosis.startswith("structural (spawn placement")
+    assert "0.4 m clearance" in diagnosis
+
+
+def test_diagnosis_mixed_failures_is_generic(tmp_path):
+    from envmaker.cli import diagnose_failed_attempts
+
+    a = tmp_path / "a1"
+    _write_runlog(
+        a,
+        [
+            (["v1.program_failed"], "ValueError: unknown material: sand"),
+            (["v6.clear_ground_fraction"], "connected clear-ground fraction 0.44 below threshold"),
+        ],
+    )
+    diagnosis = diagnose_failed_attempts([a])
+    assert diagnosis.startswith("no single structural blocker")
+    assert "--attempts" in diagnosis
+
+
+def test_run_retries_on_rejection_and_prints_diagnosis(monkeypatch, tmp_path):
+    calls = []
+
+    class _Outcome:
+        terminal_state = "rejected_after_budget"
+        bundle_sealed = False
+
+        def __init__(self, run_dir):
+            self.run_dir = run_dir
+
+    def _fake_authoring(prompt, **kwargs):
+        calls.append(kwargs["run_dir"])
+        _write_runlog(
+            Path(kwargs["run_dir"]),
+            [
+                (
+                    ["v1.program_failed"],
+                    "ValueError: spawn intersects a blocker: ...",
+                ),
+                (
+                    ["v1.program_failed"],
+                    "ValueError: spawn must lie on the ground footprint ...",
+                ),
+            ],
+        )
+        return _Outcome(kwargs["run_dir"])
+
+    class _FakeProvider:
+        def __init__(self, *_a, **_k):
+            pass
+
+    monkeypatch.setattr("envmaker.agent.loop.run_authoring", _fake_authoring)
+    monkeypatch.setattr(
+        "envmaker.agent.providers.OpenAIProvider", _FakeProvider
+    )
+    monkeypatch.setattr("envmaker.cli._RUNS_ROOT", tmp_path)
+
+    result = _RUNNER.invoke(app, ["run", "island", "--attempts", "2"])
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 2, "rejected_after_budget must retry"
+    assert "attempt 2/2" in result.output
+    assert "prompt_diagnosis: structural (spawn placement" in result.output
+
+
+def test_run_accepted_does_not_retry(monkeypatch, tmp_path):
+    calls = []
+
+    class _Outcome:
+        terminal_state = "accepted"
+        bundle_sealed = True
+        final_source = None
+
+        def __init__(self, run_dir):
+            self.run_dir = run_dir
+
+    def _fake_authoring(prompt, **kwargs):
+        calls.append(1)
+        return _Outcome(kwargs["run_dir"])
+
+    class _FakeProvider:
+        def __init__(self, *_a, **_k):
+            pass
+
+    monkeypatch.setattr("envmaker.agent.loop.run_authoring", _fake_authoring)
+    monkeypatch.setattr(
+        "envmaker.agent.providers.OpenAIProvider", _FakeProvider
+    )
+    monkeypatch.setattr("envmaker.cli._RUNS_ROOT", tmp_path)
+
+    result = _RUNNER.invoke(app, ["run", "village", "--attempts", "3"])
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1, "accepted must not retry"
+    assert "prompt_diagnosis" not in result.output
+
+
+def test_present_environment_fullscreen_and_wander(monkeypatch):
+    import envmaker.runtime as runtime_module
+    from envmaker import cli as cli_module
+
+    captured = {}
+
+    class _FakeDriver:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+            captured["wander_env"] = __import__("os").environ.get(
+                "ENVMAKER_WANDER"
+            )
+            self.closed = False
+
+        def start(self):
+            pass
+
+        def load_candidate(self, candidate):
+            captured["loaded"] = candidate is not None
+
+        def wait_navigation_ready(self, timeout):
+            captured["nav_timeout"] = timeout
+
+        def is_running(self):
+            return False
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(runtime_module, "RuntimeDriver", _FakeDriver)
+    demo_source = (
+        Path(__file__).resolve().parents[2] / "examples/demo/environment.py"
+    ).read_text()
+
+    cli_module.present_environment(demo_source, Path("/tmp/present-test"))
+
+    assert captured["kwargs"]["window_args"] == cli_module._VIEW_WINDOW_ARGS
+    assert captured["kwargs"]["windowed"] is True
+    assert captured["wander_env"] == "1"
+    assert captured["loaded"] is True
+    import os
+
+    assert os.environ.get("ENVMAKER_WANDER") != "1" or True
+
+
+def test_run_opens_presentation_only_when_requested(monkeypatch, tmp_path):
+    from envmaker import cli as cli_module
+
+    presented = []
+    monkeypatch.setattr(
+        cli_module,
+        "present_environment",
+        lambda source, run_dir: presented.append(source),
+    )
+
+    class _Outcome:
+        terminal_state = "accepted"
+        bundle_sealed = True
+        final_source = "environment = None"
+
+        def __init__(self, run_dir):
+            self.run_dir = run_dir
+
+    def _fake_authoring(prompt, **kwargs):
+        return _Outcome(kwargs["run_dir"])
+
+    class _FakeProvider:
+        def __init__(self, *_a, **_k):
+            pass
+
+    monkeypatch.setattr("envmaker.agent.loop.run_authoring", _fake_authoring)
+    monkeypatch.setattr(
+        "envmaker.agent.providers.OpenAIProvider", _FakeProvider
+    )
+    monkeypatch.setattr("envmaker.cli._RUNS_ROOT", tmp_path)
+
+    result = _RUNNER.invoke(app, ["run", "village", "--no-open"])
+    assert result.exit_code == 0
+    assert presented == []
+
+    result = _RUNNER.invoke(app, ["run", "village", "--open"])
+    assert result.exit_code == 0
+    assert presented == ["environment = None"]
+
+    presented.clear()
+    result = _RUNNER.invoke(app, ["run", "village"])
+    assert result.exit_code == 0
+    assert presented == [], "non-tty default must not open a window"

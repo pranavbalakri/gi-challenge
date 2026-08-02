@@ -24,7 +24,12 @@ from envmaker.core.model import (
 )
 from envmaker.core.program import EnvironmentProgram, ProviderInfo, ResourceLimits
 from envmaker.core.requirements import PromptRequirementSet
-from envmaker.core.scene_spec import CandidateScene, GodotSceneSpec, SceneNode
+from envmaker.core.scene_spec import (
+    CandidateScene,
+    GodotSceneSpec,
+    SceneNode,
+    SphereVisual,
+)
 from envmaker.core.signals import SignalSeverity
 from envmaker.sdk import SDK_VERSION, EnvironmentBuilder, Polygon2D, compile_environment_model
 from envmaker.validation import (
@@ -242,6 +247,35 @@ def test_asset_stage_fails_on_non_finite_origin() -> None:
     )
     assert "rock" in failure.subject_ids
     assert HardStage.SCENE not in reports
+
+
+def test_asset_stage_rejects_oversized_sphere_radius() -> None:
+    model = _tiny_model()
+    candidate = compile_environment_model(model)
+    huge = SphereVisual(radius=1e9, material="rock")
+    nodes = []
+    for node in candidate.scene.nodes:
+        if node.semantic_id == "rock":
+            nodes.append(node.model_copy(update={"visual": huge}))
+        else:
+            nodes.append(node)
+    broken = CandidateScene(
+        scene=GodotSceneSpec(
+            nodes=tuple(nodes),
+            camera=candidate.scene.camera,
+            controller_semantic_id=candidate.scene.controller_semantic_id,
+        ),
+        manifest=candidate.manifest,
+    )
+    static = validate_model(model, candidate=broken)
+    reports = _report_map(static)
+    assert reports[HardStage.ASSET].passed is False
+    failure = next(
+        signal
+        for signal in reports[HardStage.ASSET].signals
+        if signal.code == "v4.invalid_dimensions"
+    )
+    assert "rock" in failure.subject_ids
 
 
 def test_scene_stage_fails_when_spawn_on_ground_edge() -> None:

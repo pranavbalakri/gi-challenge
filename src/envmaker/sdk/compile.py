@@ -18,7 +18,9 @@ from envmaker.core.scene_spec import ColliderSpec as _ColliderSpec
 from envmaker.core.scene_spec import CylinderVisual as _CylinderVisual
 from envmaker.core.scene_spec import GodotSceneSpec as _GodotSceneSpec
 from envmaker.core.scene_spec import PlaneVisual as _PlaneVisual
+from envmaker.core.scene_spec import RibbonVisual as _RibbonVisual
 from envmaker.core.scene_spec import SceneNode as _SceneNode
+from envmaker.core.scene_spec import SphereVisual as _SphereVisual
 from envmaker.sdk.footprints import Polygon2D as _Polygon2D
 from envmaker.sdk.footprints import min_area_obb as _min_area_obb
 from envmaker.sdk.footprints import polygon_bounds as _polygon_bounds
@@ -153,14 +155,95 @@ def _part_visual(
     if part.shape == "box":
         assert size is not None
         return _BoxVisual(size=size, material=part.material)
+    if part.shape == "sphere":
+        assert radius is not None
+        return _SphereVisual(radius=radius, material=part.material)
+    if part.shape == "cone":
+        assert radius is not None and height is not None
+        return _CylinderVisual(
+            radius=radius,
+            top_radius=0.0,
+            height=height,
+            material=part.material,
+        )
     assert radius is not None and height is not None
     return _CylinderVisual(radius=radius, height=height, material=part.material)
+
+
+def _part_collider(
+    part: _KitPart,
+    *,
+    size: tuple[float, float, float] | None = None,
+    radius: float | None = None,
+    height: float | None = None,
+) -> _ColliderSpec:
+    """Build a collider for a blocking kit part.
+
+    Sphere and cone parts use CYLINDER colliders: the ColliderShape enum has no
+    sphere, so spheres approximate as a cylinder of equal radius and height
+    ``2 * radius``. Cones use the cone's base radius and height.
+    """
+
+    if part.shape == "box":
+        assert size is not None
+        return _box_collider(size[0], size[1], size[2])
+    assert radius is not None
+    if part.shape == "sphere":
+        return _cylinder_collider(radius, 2.0 * radius)
+    assert height is not None
+    return _cylinder_collider(radius, height)
 
 
 def _dotted_id(name: str, *parts: int) -> str:
     # Godot strips '.' from tree node names; runtime resolution uses semantic_id
     # from the candidate JSON, so tree-name divergence from dotted ids is deliberate.
     return ".".join((name, *(str(part) for part in parts)))
+
+
+def _prop_keepout_radius(kit: _Kit, scale: float) -> float:
+    """Conservative horizontal keep-out radius for a blocking prop placement."""
+
+    reach = 0.0
+    for part in kit.parts:
+        if part.shape == "box":
+            assert part.size is not None
+            half_x = part.size[0] / 2.0
+            half_z = part.size[2] / 2.0
+        else:
+            assert part.radius is not None
+            half_x = half_z = float(part.radius)
+        part_reach = max(
+            abs(float(part.offset[0])) + half_x,
+            abs(float(part.offset[2])) + half_z,
+        )
+        reach = max(reach, part_reach)
+    return float(scale) * reach
+
+
+def _scaled_part_dims(
+    part: _KitPart,
+    scale_x: float,
+    scale_y: float,
+    scale_z: float,
+) -> tuple[
+    tuple[float, float, float] | None,
+    float | None,
+    float | None,
+]:
+    if part.shape == "box":
+        assert part.size is not None
+        size = (
+            part.size[0] * scale_x,
+            part.size[1] * scale_y,
+            part.size[2] * scale_z,
+        )
+        return size, None, None
+    assert part.radius is not None
+    radius = part.radius * min(scale_x, scale_z)
+    if part.shape == "sphere":
+        return None, radius, None
+    assert part.height is not None
+    return None, radius, part.height * scale_y
 
 
 def _compile_kit_parts(
@@ -171,66 +254,66 @@ def _compile_kit_parts(
     scale: tuple[float, float, float] | None,
     yaw: float,
     blocking: bool,
+    placement_scales: list[float] | None = None,
+    placement_yaws: list[float] | None = None,
 ) -> list[_SceneNode]:
     nodes: list[_SceneNode] = []
-    scale_x, scale_y, scale_z = scale if scale is not None else (1.0, 1.0, 1.0)
     for placement_index, (center_x, center_z) in enumerate(positions):
+        if placement_scales is not None:
+            uniform = placement_scales[placement_index]
+            scale_x = scale_y = scale_z = uniform
+            place_yaw = (
+                placement_yaws[placement_index]
+                if placement_yaws is not None
+                else 0.0
+            )
+            use_scaled = True
+        elif scale is not None:
+            scale_x, scale_y, scale_z = scale
+            place_yaw = yaw
+            use_scaled = True
+        else:
+            scale_x = scale_y = scale_z = 1.0
+            place_yaw = 0.0
+            use_scaled = False
+
         for part_index, part in enumerate(kit.parts):
-            if scale is None:
-                if len(positions) == 1:
-                    node_id = _dotted_id(name, part_index)
-                else:
-                    node_id = _dotted_id(name, placement_index, part_index)
-                semantic_id = node_id
+            if len(positions) == 1:
+                node_id = _dotted_id(name, part_index)
+            else:
+                node_id = _dotted_id(name, placement_index, part_index)
+            semantic_id = node_id
+
+            if not use_scaled:
                 world_offset = part.offset
                 part_yaw = None
                 if part.shape == "box":
                     assert part.size is not None
-                    visual = _part_visual(part, size=part.size)
-                    collider = (
-                        _box_collider(part.size[0], part.size[1], part.size[2])
-                        if blocking
-                        else None
-                    )
+                    size, radius, height = part.size, None, None
+                elif part.shape == "sphere":
+                    assert part.radius is not None
+                    size, radius, height = None, part.radius, None
                 else:
                     assert part.radius is not None and part.height is not None
-                    visual = _part_visual(
-                        part, radius=part.radius, height=part.height
-                    )
-                    collider = (
-                        _cylinder_collider(part.radius, part.height)
-                        if blocking
-                        else None
-                    )
+                    size, radius, height = None, part.radius, part.height
             else:
-                node_id = _dotted_id(name, part_index)
-                semantic_id = node_id
                 scaled_offset = (
                     part.offset[0] * scale_x,
                     part.offset[1] * scale_y,
                     part.offset[2] * scale_z,
                 )
-                world_offset = _rotate_offset(scaled_offset, yaw)
-                part_yaw = yaw
-                if part.shape == "box":
-                    assert part.size is not None
-                    size = (
-                        part.size[0] * scale_x,
-                        part.size[1] * scale_y,
-                        part.size[2] * scale_z,
-                    )
-                    visual = _part_visual(part, size=size)
-                    collider = (
-                        _box_collider(size[0], size[1], size[2]) if blocking else None
-                    )
-                else:
-                    assert part.radius is not None and part.height is not None
-                    radius = part.radius * min(scale_x, scale_z)
-                    height = part.height * scale_y
-                    visual = _part_visual(part, radius=radius, height=height)
-                    collider = (
-                        _cylinder_collider(radius, height) if blocking else None
-                    )
+                world_offset = _rotate_offset(scaled_offset, place_yaw)
+                part_yaw = place_yaw
+                size, radius, height = _scaled_part_dims(
+                    part, scale_x, scale_y, scale_z
+                )
+
+            visual = _part_visual(part, size=size, radius=radius, height=height)
+            collider = (
+                _part_collider(part, size=size, radius=radius, height=height)
+                if blocking
+                else None
+            )
 
             origin = (
                 center_x + world_offset[0],
@@ -271,29 +354,22 @@ def _compile_ground(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
 
 
 def _compile_path(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
-    points = [(float(x), float(z)) for x, z in payload["points"]]
+    """Compile a path to a single Catmull-Rom ribbon (visual-only)."""
+
+    points = tuple((float(x), float(z)) for x, z in payload["points"])
     width = float(payload["width"])
     material = str(payload["material"])
-    nodes: list[_SceneNode] = []
-    for index, ((x0, z0), (x1, z1)) in enumerate(zip(points, points[1:])):
-        dx = x1 - x0
-        dz = z1 - z0
-        length = _math.hypot(dx, dz)
-        yaw = _math.atan2(-dz, dx)
-        mid_x = (x0 + x1) / 2.0
-        mid_z = (z0 + z1) / 2.0
-        node_id = _dotted_id(name, index)
-        nodes.append(
-            _node(
-                node_id=node_id,
-                semantic_id=node_id,
-                transform=_transform((mid_x, 0.01, mid_z), yaw),
-                visual=_BoxVisual(size=(length, 0.02, width), material=material),
-                collider=None,
-                navmesh_contributor=False,
-            )
+    node_id = _dotted_id(name, 0)
+    return [
+        _node(
+            node_id=node_id,
+            semantic_id=node_id,
+            transform=_transform((0.0, 0.01, 0.0)),
+            visual=_RibbonVisual(points=points, width=width, material=material),
+            collider=None,
+            navmesh_contributor=False,
         )
-    return nodes
+    ]
 
 
 def _compile_water(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
@@ -395,11 +471,32 @@ def _compile_landmark(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
     )
 
 
+def _compile_prop(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
+    position = (float(payload["position"][0]), float(payload["position"][1]))
+    kit = _get_kit(str(payload["kit"]))
+    scale = float(payload["scale"])
+    yaw = _math.radians(float(payload["yaw_degrees"]))
+    return _compile_kit_parts(
+        name=name,
+        kit=kit,
+        positions=[position],
+        scale=(scale, scale, scale),
+        yaw=yaw,
+        blocking=kit.blocking,
+    )
+
+
 def _extract_blockers(
     components: tuple[_Any, ...],
-) -> tuple[list[_Polygon2D], list[tuple[_Point, _Point, float]], _Point | None]:
+) -> tuple[
+    list[_Polygon2D],
+    list[tuple[_Point, _Point, float]],
+    list[tuple[_Point, float]],
+    _Point | None,
+]:
     polygons: list[_Polygon2D] = []
     walls: list[tuple[_Point, _Point, float]] = []
+    prop_circles: list[tuple[_Point, float]] = []
     spawn: _Point | None = None
     for component in components:
         discriminator = component.payload.get("component")
@@ -416,12 +513,21 @@ def _extract_blockers(
             )
             thickness = float(component.payload["thickness"])
             walls.append((start, end, thickness))
+        elif discriminator == "prop":
+            kit = _get_kit(str(component.payload["kit"]))
+            if kit.blocking:
+                center = (
+                    float(component.payload["position"][0]),
+                    float(component.payload["position"][1]),
+                )
+                scale = float(component.payload["scale"])
+                prop_circles.append((center, _prop_keepout_radius(kit, scale)))
         elif discriminator == "spawn":
             spawn = (
                 float(component.payload["position"][0]),
                 float(component.payload["position"][1]),
             )
-    return polygons, walls, spawn
+    return polygons, walls, prop_circles, spawn
 
 
 def _sample_scatter_points(
@@ -433,11 +539,16 @@ def _sample_scatter_points(
     min_spacing: float,
     blocker_polygons: list[_Polygon2D],
     walls: list[tuple[_Point, _Point, float]],
+    prop_circles: list[tuple[_Point, float]],
     spawn: _Point | None,
-) -> list[tuple[float, float]]:
+    yaw_jitter: bool,
+    scale_range: tuple[float, float] | None,
+) -> tuple[list[tuple[float, float]], list[float] | None, list[float] | None]:
     rng = _random.Random(f"{seed}:{name}")
     min_x, min_z, max_x, max_z = _polygon_bounds(footprint)
     accepted: list[tuple[float, float]] = []
+    placement_yaws: list[float] | None = [] if yaw_jitter else None
+    placement_scales: list[float] | None = [] if scale_range is not None else None
     max_attempts = 200 * count
     attempts = 0
     while len(accepted) < count and attempts < max_attempts:
@@ -453,6 +564,11 @@ def _sample_scatter_points(
             for start, end, thickness in walls
         ):
             continue
+        if any(
+            _math.hypot(x - center[0], z - center[1]) <= radius
+            for center, radius in prop_circles
+        ):
+            continue
         if spawn is not None and _math.hypot(x - spawn[0], z - spawn[1]) < 1.0:
             continue
         if any(
@@ -461,11 +577,19 @@ def _sample_scatter_points(
         ):
             continue
         accepted.append((x, z))
+        # Variation draws happen only after acceptance so the default path
+        # keeps a byte-identical RNG sequence for position sampling.
+        if yaw_jitter:
+            assert placement_yaws is not None
+            placement_yaws.append(rng.uniform(0.0, 2.0 * _math.pi))
+        if scale_range is not None:
+            assert placement_scales is not None
+            placement_scales.append(rng.uniform(scale_range[0], scale_range[1]))
     if len(accepted) < count:
         raise ValueError(
             f"scatter '{name}' placed {len(accepted)} of {count} requested"
         )
-    return accepted
+    return accepted, placement_yaws, placement_scales
 
 
 def _compile_scatter(
@@ -477,6 +601,7 @@ def _compile_scatter(
     ground_footprint: _Polygon2D,
     blocker_polygons: list[_Polygon2D],
     walls: list[tuple[_Point, _Point, float]],
+    prop_circles: list[tuple[_Point, float]],
     spawn: _Point | None,
 ) -> list[_SceneNode]:
     region = str(payload["region"])
@@ -485,7 +610,12 @@ def _compile_scatter(
     kit = _get_kit(str(payload["kit"]))
     count = int(payload["count"])
     min_spacing = float(payload["min_spacing"])
-    points = _sample_scatter_points(
+    yaw_jitter = bool(payload.get("yaw_jitter", False))
+    raw_range = payload.get("scale_range")
+    scale_range: tuple[float, float] | None = None
+    if raw_range is not None:
+        scale_range = (float(raw_range[0]), float(raw_range[1]))
+    points, placement_yaws, placement_scales = _sample_scatter_points(
         seed=seed,
         name=name,
         footprint=ground_footprint,
@@ -493,8 +623,22 @@ def _compile_scatter(
         min_spacing=min_spacing,
         blocker_polygons=blocker_polygons,
         walls=walls,
+        prop_circles=prop_circles,
         spawn=spawn,
+        yaw_jitter=yaw_jitter,
+        scale_range=scale_range,
     )
+    if placement_yaws is None and placement_scales is None:
+        return _compile_kit_parts(
+            name=name,
+            kit=kit,
+            positions=points,
+            scale=None,
+            yaw=0.0,
+            blocking=kit.blocking,
+        )
+    scales = placement_scales if placement_scales is not None else [1.0] * len(points)
+    yaws = placement_yaws if placement_yaws is not None else [0.0] * len(points)
     return _compile_kit_parts(
         name=name,
         kit=kit,
@@ -502,6 +646,8 @@ def _compile_scatter(
         scale=None,
         yaw=0.0,
         blocking=kit.blocking,
+        placement_scales=scales,
+        placement_yaws=yaws,
     )
 
 
@@ -554,7 +700,9 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
     if spawn_name is None:
         raise ValueError("missing spawn component")
 
-    blocker_polygons, walls, spawn_position = _extract_blockers(model.components)
+    blocker_polygons, walls, prop_circles, spawn_position = _extract_blockers(
+        model.components
+    )
 
     nodes: list[_SceneNode] = []
     camera_size: float | None = None
@@ -578,6 +726,8 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
             nodes.extend(_compile_structure(name, payload))
         elif discriminator == "landmark":
             nodes.extend(_compile_landmark(name, payload))
+        elif discriminator == "prop":
+            nodes.extend(_compile_prop(name, payload))
         elif discriminator == "scatter":
             nodes.extend(
                 _compile_scatter(
@@ -588,6 +738,7 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
                     ground_footprint=ground_footprint,
                     blocker_polygons=blocker_polygons,
                     walls=walls,
+                    prop_circles=prop_circles,
                     spawn=spawn_position,
                 )
             )

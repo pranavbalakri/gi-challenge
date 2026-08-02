@@ -86,6 +86,8 @@ def test_kit_catalog_integrity() -> None:
         "obelisk": ("landmark", False),
         "banner": ("landmark", False),
         "pine": ("vegetation", True),
+        "oak": ("vegetation", True),
+        "boulder": ("vegetation", True),
         "shrub": ("vegetation", False),
     }
     assert set(KITS) == set(expected)
@@ -97,6 +99,14 @@ def test_kit_catalog_integrity() -> None:
         assert len(kit.parts) >= 1
         for part in kit.parts:
             assert part.material in CURATED_MATERIALS
+    pine = get_kit("pine")
+    assert [part.shape for part in pine.parts] == ["cylinder", "cone"]
+    oak = get_kit("oak")
+    assert oak.parts[0].shape == "cylinder"
+    assert all(part.shape == "sphere" for part in oak.parts[1:])
+    boulder = get_kit("boulder")
+    assert [part.shape for part in boulder.parts] == ["sphere", "sphere"]
+    assert boulder.parts[0].offset[1] < boulder.parts[0].radius
     with pytest.raises(ValueError, match="unknown kit: castle"):
         get_kit("castle")
 
@@ -110,6 +120,35 @@ def test_kit_part_shape_exclusivity() -> None:
     ):
         KitPart(shape="cylinder", offset=(0.0, 0.0, 0.0),
                 size=(1.0, 1.0, 1.0), material="stone")
+    with pytest.raises(ValidationError, match="sphere parts take radius only"):
+        KitPart(
+            shape="sphere",
+            offset=(0.0, 0.0, 0.0),
+            radius=1.0,
+            height=1.0,
+            material="rock",
+        )
+    with pytest.raises(
+        ValidationError, match="cone parts take radius and height only"
+    ):
+        KitPart(
+            shape="cone",
+            offset=(0.0, 0.0, 0.0),
+            size=(1.0, 1.0, 1.0),
+            material="grass",
+        )
+    ok_sphere = KitPart(
+        shape="sphere", offset=(0.0, 0.5, 0.0), radius=0.8, material="rock"
+    )
+    assert ok_sphere.radius == pytest.approx(0.8)
+    ok_cone = KitPart(
+        shape="cone",
+        offset=(0.0, 1.0, 0.0),
+        radius=0.5,
+        height=1.2,
+        material="grass",
+    )
+    assert ok_cone.height == pytest.approx(1.2)
     with pytest.raises(
         ValidationError, match="dimensions must be finite and positive"
     ):
@@ -128,10 +167,14 @@ def test_kit_blocking_is_explicit() -> None:
 
 
 def test_structure_kits_stay_in_unit_space() -> None:
+    # Unit-space rule applies only to structure kits (vegetation/landmark are
+    # authored in world scale).
     for name in ("stone_ruin", "timber_hut", "watchtower"):
         for part in get_kit(name).parts:
             if part.shape == "box":
                 extent_x, extent_y, extent_z = part.size
+            elif part.shape == "sphere":
+                extent_x = extent_y = extent_z = 2.0 * part.radius
             else:
                 extent_x = extent_z = 2.0 * part.radius
                 extent_y = part.height
@@ -423,3 +466,121 @@ def test_builder_rejects_oversized_coordinates() -> None:
             thickness=0.2,
             material="stone",
         )
+
+
+def test_spawn_blocker_error_is_located() -> None:
+    from envmaker.sdk import EnvironmentBuilder
+
+    builder = EnvironmentBuilder("located", seed=1)
+    builder.ground(
+        "g",
+        footprint=Polygon2D([(-10, -10), (10, -10), (10, 10), (-10, 10)]),
+        material="grass",
+    )
+    builder.water(
+        "pond_east", footprint=Polygon2D([(2, -3), (8, -3), (8, 3), (2, 3)])
+    )
+    builder.spawn("agent", position=(5.0, 0.0))
+    builder.camera(orthographic_size=15)
+    with pytest.raises(ValueError) as excinfo:
+        builder.freeze()
+    message = str(excinfo.value)
+    assert message.startswith("spawn intersects a blocker")
+    assert "pond_east" in message
+    assert "x 2.0..8.0" in message and "z -3.0..3.0" in message
+    assert "spawn=(5.0, 0.0)" in message
+
+
+def test_spawn_off_ground_error_is_located() -> None:
+    from envmaker.sdk import EnvironmentBuilder
+
+    builder = EnvironmentBuilder("located2", seed=1)
+    builder.ground(
+        "g",
+        footprint=Polygon2D([(-10, -10), (10, -10), (10, 10), (-10, 10)]),
+        material="grass",
+    )
+    builder.spawn("agent", position=(9.9, 0.0))
+    builder.camera(orthographic_size=15)
+    with pytest.raises(ValueError) as excinfo:
+        builder.freeze()
+    message = str(excinfo.value)
+    assert message.startswith("spawn must lie on the ground footprint")
+    assert "spawn=(9.9, 0.0)" in message
+    assert "ground x -10.0..10.0" in message
+
+
+def test_builder_prop_category_and_yaw_and_spawn_keepout() -> None:
+    from envmaker.core.model import ComponentKind
+    from envmaker.sdk import EnvironmentBuilder
+
+    builder = EnvironmentBuilder("props", seed=2).ground(
+        "ground", footprint=_square(40.0), material="grass"
+    )
+    with pytest.raises(ValueError, match="use structure\\(\\)"):
+        builder.prop("hut", kit="timber_hut", position=(4.0, 4.0))
+
+    model = (
+        EnvironmentBuilder("yaw", seed=2)
+        .ground("ground", footprint=_square(40.0), material="grass")
+        .prop("flag", kit="banner", position=(6.0, 6.0), yaw=-45.0, scale=1.25)
+        .spawn("hero", position=(0.0, 0.0))
+        .camera(orthographic_size=16.0)
+        .freeze()
+    )
+    prop = model.components[1]
+    assert prop.kind is ComponentKind.PRESENTATION
+    assert prop.payload["component"] == "prop"
+    assert prop.payload["yaw_degrees"] == pytest.approx(315.0)
+    assert prop.payload["scale"] == pytest.approx(1.25)
+
+    pine = (
+        EnvironmentBuilder("blocked-prop", seed=2)
+        .ground("ground", footprint=_square(40.0), material="grass")
+        .prop("tree", kit="pine", position=(0.0, 0.0), scale=1.0)
+        .spawn("hero", position=(0.0, 0.0))
+        .camera(orthographic_size=16.0)
+    )
+    with pytest.raises(ValueError) as excinfo:
+        pine.freeze()
+    message = str(excinfo.value)
+    assert "tree" in message
+    assert "radius" in message
+    assert "prop" in message
+
+
+def test_builder_scatter_scale_range_validation() -> None:
+    from envmaker.sdk import EnvironmentBuilder
+
+    builder = (
+        EnvironmentBuilder("scatter-opt", seed=1)
+        .ground("ground", footprint=_square(20.0), material="grass")
+    )
+    with pytest.raises(ValueError, match="scale_range"):
+        builder.scatter(
+            "grove",
+            region="ground",
+            kit="shrub",
+            count=2,
+            min_spacing=1.0,
+            scale_range=(0.4, 1.0),
+        )
+    model = (
+        EnvironmentBuilder("scatter-ok", seed=1)
+        .ground("ground", footprint=_square(20.0), material="grass")
+        .scatter(
+            "grove",
+            region="ground",
+            kit="pine",
+            count=2,
+            min_spacing=2.0,
+            yaw_jitter=True,
+            scale_range=(0.5, 2.0),
+        )
+        .spawn("hero", position=(0.0, 0.0))
+        .camera(orthographic_size=14.0)
+        .freeze()
+    )
+    payload = model.components[1].payload
+    assert payload["yaw_jitter"] is True
+    assert payload["scale_range"] == [0.5, 2.0]

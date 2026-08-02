@@ -424,6 +424,10 @@ func _handle_load_candidate(body: Dictionary) -> void:
 	_camera_rig.setup(float(orthographic_size_value))
 	_camera_rig.frame_isometric(_spawn)
 	_camera_rig.set_follow_target(_agent)
+	if OS.get_environment("ENVMAKER_WANDER") == "1":
+		# Presentation mode: goalless traversal starts as soon as the world
+		# exists; probe episodes pause it and resume afterwards.
+		_agent.start_wander(AGENT_SPEED * 0.6)
 	_candidate = candidate
 	_candidate_loaded = true
 	_send_success(
@@ -812,6 +816,7 @@ func _respond_probe(body: Dictionary) -> void:
 		)
 		return
 	var target: Vector3 = target_value
+	_agent.stop_wander()
 	var episode: Dictionary = await _agent.run_episode(
 		target,
 		float(radius_value),
@@ -819,6 +824,11 @@ func _respond_probe(body: Dictionary) -> void:
 		int(stuck_value),
 		AGENT_SPEED,
 	)
+	if OS.get_environment("ENVMAKER_WANDER") == "1":
+		# Presentation mode: after the validated episode, keep the agent
+		# traversing the navmesh (which already excludes water/blockers)
+		# so the open window shows a living environment.
+		_agent.start_wander(AGENT_SPEED * 0.6)
 	_send_success(
 		body,
 		{

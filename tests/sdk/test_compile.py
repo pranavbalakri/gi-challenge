@@ -7,7 +7,13 @@ import math
 import pytest
 
 from envmaker.core.model import ComponentKind, EnvironmentModel, SemanticComponent
-from envmaker.core.scene_spec import BoxVisual, PlaneVisual
+from envmaker.core.scene_spec import (
+    BoxVisual,
+    CylinderVisual,
+    PlaneVisual,
+    RibbonVisual,
+    SphereVisual,
+)
 from envmaker.sdk import SDK_VERSION, EnvironmentBuilder, Polygon2D, compile_environment_model
 from envmaker.sdk.footprints import polygon_contains
 from envmaker.sdk.kits import get_kit
@@ -69,9 +75,9 @@ def _full_model(*, seed: int = 0) -> EnvironmentModel:
 
 
 def _expected_node_count(model: EnvironmentModel) -> int:
-    # ground(1) + path(2) + water(2: visual+blocker) + wall(1) + obstacle(1)
+    # ground(1) + path(1 ribbon) + water(2: visual+blocker) + wall(1) + obstacle(1)
     # + stone_ruin(4) + obelisk(2) + shrub scatter 3*1 + spawn(1)
-    return 1 + 2 + 2 + 1 + 1 + 4 + 2 + 3 + 1
+    return 1 + 1 + 2 + 1 + 1 + 4 + 2 + 3 + 1
 
 
 def test_compile_full_round_trip_node_count() -> None:
@@ -105,12 +111,18 @@ def test_compile_path_has_no_collider() -> None:
     path_nodes = [
         node for node in candidate.scene.nodes if node.node_id.startswith("trail.")
     ]
-    assert len(path_nodes) == 2
-    for node in path_nodes:
-        assert node.collider is None
-        assert node.navmesh_contributor is False
-        assert isinstance(node.visual, BoxVisual)
-        assert node.transform.origin.y == pytest.approx(0.01)
+    assert len(path_nodes) == 1
+    node = path_nodes[0]
+    assert node.node_id == "trail.0"
+    assert node.collider is None
+    assert node.navmesh_contributor is False
+    assert isinstance(node.visual, RibbonVisual)
+    assert node.visual.points == ((-5.0, 0.0), (0.0, 0.0), (5.0, 0.0))
+    assert node.visual.width == pytest.approx(1.5)
+    assert node.visual.material == "dirt"
+    assert node.transform.origin.y == pytest.approx(0.01)
+    assert node.transform.origin.x == pytest.approx(0.0)
+    assert node.transform.origin.z == pytest.approx(0.0)
 
 
 def test_compile_blockers_have_colliders() -> None:
@@ -427,3 +439,218 @@ def test_compile_rejects_duplicate_singletons() -> None:
     )
     with pytest.raises(ValueError, match="duplicate ground"):
         compile_environment_model(model)
+
+
+# Re-pinned in Phase 2b: paths compile to a single RibbonVisual (was per-segment
+# boxes) and pine kit is trunk+cone (was trunk+two canopy boxes). Scatter
+# position RNG sequence is unchanged when yaw_jitter/scale_range are off.
+_DEMO_CANDIDATE_FINGERPRINT = (
+    # Re-pinned after the organic kit resize (pine/oak/boulder proportions).
+    "be56ab375bfb2d10663c8b619a32296fd0e636dc4718dcbbf0aba817bcb09bbe"
+)
+
+
+def test_demo_fingerprint_unchanged_without_scatter_variation() -> None:
+    from pathlib import Path
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "examples" / "demo" / "environment.py"
+    spec = importlib.util.spec_from_file_location("demo_env_fp", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    candidate = compile_environment_model(module.environment)
+    assert candidate.candidate_fingerprint == _DEMO_CANDIDATE_FINGERPRINT
+
+
+def test_compile_prop_node_arithmetic_and_determinism() -> None:
+    yaw_degrees = 90.0
+    scale = 1.5
+    position = (5.0, -3.0)
+    yaw = math.radians(yaw_degrees)
+    kit = get_kit("banner")
+
+    def _build() -> EnvironmentModel:
+        return (
+            EnvironmentBuilder("prop-demo", seed=3)
+            .ground("ground", footprint=_square(40.0), material="grass")
+            .prop(
+                "flag",
+                kit="banner",
+                position=position,
+                yaw=yaw_degrees,
+                scale=scale,
+            )
+            .spawn("hero", position=(0.0, 0.0))
+            .camera(orthographic_size=16.0)
+            .freeze()
+        )
+
+    first = compile_environment_model(_build())
+    second = compile_environment_model(_build())
+    assert first.candidate_fingerprint == second.candidate_fingerprint
+
+    nodes = sorted(
+        (node for node in first.scene.nodes if node.semantic_id.startswith("flag.")),
+        key=lambda node: node.semantic_id,
+    )
+    assert len(nodes) == len(kit.parts)
+    cos_yaw = math.cos(yaw)
+    sin_yaw = math.sin(yaw)
+    for part, node in zip(kit.parts, nodes, strict=True):
+        assert node.collider is None
+        assert node.navmesh_contributor is False
+        ox = part.offset[0] * scale
+        oy = part.offset[1] * scale
+        oz = part.offset[2] * scale
+        world_x = cos_yaw * ox + sin_yaw * oz
+        world_z = -sin_yaw * ox + cos_yaw * oz
+        assert node.transform.origin.x == pytest.approx(position[0] + world_x)
+        assert node.transform.origin.y == pytest.approx(oy)
+        assert node.transform.origin.z == pytest.approx(position[1] + world_z)
+        if part.shape == "box":
+            assert part.size is not None
+            assert isinstance(node.visual, BoxVisual)
+            assert node.visual.size == pytest.approx(
+                (part.size[0] * scale, part.size[1] * scale, part.size[2] * scale)
+            )
+        else:
+            assert part.radius is not None and part.height is not None
+            assert node.visual is not None
+            assert node.visual.radius == pytest.approx(part.radius * scale)
+            assert node.visual.height == pytest.approx(part.height * scale)
+
+
+def test_compile_prop_scales_colliders_when_blocking() -> None:
+    model = (
+        EnvironmentBuilder("pine-prop", seed=1)
+        .ground("ground", footprint=_square(40.0), material="grass")
+        .prop("tree", kit="pine", position=(8.0, 8.0), scale=2.0)
+        .spawn("hero", position=(0.0, 0.0))
+        .camera(orthographic_size=16.0)
+        .freeze()
+    )
+    candidate = compile_environment_model(model)
+    trunk = next(n for n in candidate.scene.nodes if n.semantic_id == "tree.0")
+    canopy = next(n for n in candidate.scene.nodes if n.semantic_id == "tree.1")
+    assert trunk.collider is not None
+    # Pine trunk is r=0.22 h=2.0 at scale 2.0 after the organic resize.
+    assert trunk.collider.dimensions == pytest.approx({"radius": 0.44, "height": 4.0})
+    assert isinstance(trunk.visual, CylinderVisual)
+    assert trunk.visual.top_radius is None
+    assert canopy.collider is not None
+    # Cone canopy (r=1.3 h=2.8 at scale 2.0): cylinder collider; top_radius=0.
+    assert canopy.collider.dimensions == pytest.approx({"radius": 2.6, "height": 5.6})
+    assert isinstance(canopy.visual, CylinderVisual)
+    assert canopy.visual.top_radius == pytest.approx(0.0)
+    assert trunk.navmesh_contributor is True
+
+
+def test_compile_sphere_and_cone_kit_parts() -> None:
+    model = (
+        EnvironmentBuilder("organic-kits", seed=1)
+        .ground("ground", footprint=_square(40.0), material="grass")
+        .prop("oak_tree", kit="oak", position=(6.0, 6.0), scale=1.0)
+        .prop("rock", kit="boulder", position=(-6.0, -6.0), scale=1.5)
+        .spawn("hero", position=(0.0, 0.0))
+        .camera(orthographic_size=16.0)
+        .freeze()
+    )
+    candidate = compile_environment_model(model)
+    oak_kit = get_kit("oak")
+    boulder_kit = get_kit("boulder")
+    assert oak_kit.blocking is True
+    assert boulder_kit.blocking is True
+
+    oak_nodes = sorted(
+        (n for n in candidate.scene.nodes if n.semantic_id.startswith("oak_tree.")),
+        key=lambda n: n.semantic_id,
+    )
+    assert len(oak_nodes) == len(oak_kit.parts)
+    assert isinstance(oak_nodes[0].visual, CylinderVisual)
+    assert oak_nodes[0].visual.top_radius is None
+    for node in oak_nodes[1:]:
+        assert isinstance(node.visual, SphereVisual)
+        assert node.collider is not None
+        assert node.collider.shape.value == "cylinder"
+        assert node.collider.dimensions["height"] == pytest.approx(
+            2.0 * node.visual.radius
+        )
+
+    boulder_nodes = sorted(
+        (n for n in candidate.scene.nodes if n.semantic_id.startswith("rock.")),
+        key=lambda n: n.semantic_id,
+    )
+    assert len(boulder_nodes) == 2
+    for part, node in zip(boulder_kit.parts, boulder_nodes, strict=True):
+        assert isinstance(node.visual, SphereVisual)
+        assert part.radius is not None
+        assert node.visual.radius == pytest.approx(part.radius * 1.5)
+        assert node.collider is not None
+        assert node.collider.dimensions == pytest.approx(
+            {"radius": part.radius * 1.5, "height": 2.0 * part.radius * 1.5}
+        )
+        assert part.offset[1] < part.radius
+
+
+def test_compile_scatter_variation_determinism() -> None:
+    def _build(seed: int) -> EnvironmentModel:
+        return (
+            EnvironmentBuilder("jitter", seed=seed)
+            .ground("ground", footprint=_square(30.0), material="grass")
+            .scatter(
+                "grove",
+                region="ground",
+                kit="shrub",
+                count=4,
+                min_spacing=2.0,
+                yaw_jitter=True,
+                scale_range=(0.7, 1.4),
+            )
+            .spawn("hero", position=(0.0, 0.0))
+            .camera(orthographic_size=16.0)
+            .freeze()
+        )
+
+    first = compile_environment_model(_build(9))
+    second = compile_environment_model(_build(9))
+    third = compile_environment_model(_build(10))
+    assert first.candidate_fingerprint == second.candidate_fingerprint
+    assert first.candidate_fingerprint != third.candidate_fingerprint
+
+
+def test_compile_scatter_avoids_blocking_props() -> None:
+    model = (
+        EnvironmentBuilder("prop-keepout", seed=4)
+        .ground("ground", footprint=_square(20.0), material="grass")
+        .prop("tree", kit="pine", position=(0.0, 0.0), scale=1.0)
+        .scatter("grove", region="ground", kit="shrub", count=12, min_spacing=1.0)
+        .spawn("hero", position=(8.0, 8.0))
+        .camera(orthographic_size=16.0)
+        .freeze()
+    )
+    candidate = compile_environment_model(model)
+    kit = get_kit("pine")
+    reach = 0.0
+    for part in kit.parts:
+        if part.shape == "box":
+            assert part.size is not None
+            half_x = part.size[0] / 2.0
+            half_z = part.size[2] / 2.0
+        else:
+            assert part.radius is not None
+            half_x = half_z = part.radius
+        reach = max(
+            reach,
+            abs(part.offset[0]) + half_x,
+            abs(part.offset[2]) + half_z,
+        )
+    # Pine canopy is a cone (radius keep-out), not a box.
+    points = [
+        (node.transform.origin.x, node.transform.origin.z)
+        for node in candidate.scene.nodes
+        if node.semantic_id.startswith("grove.")
+    ]
+    assert len(points) == 12
+    for x, z in points:
+        assert math.hypot(x, z) > reach

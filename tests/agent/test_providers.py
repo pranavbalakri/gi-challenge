@@ -156,9 +156,62 @@ def test_openai_request_path_offline(monkeypatch) -> None:
         "compile_environment",
         "probe_environment",
         "render_environment",
+        "audit_render",
         "simulate_navigation",
     }
     assert captured["timeout"] == 120.0
+
+
+def test_openai_request_preserves_content_array_message(monkeypatch) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    from envmaker.agent.providers import OpenAIProvider
+
+    captured: dict[str, object] = {}
+
+    class _FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            msg = SimpleNamespace(content="ok", tool_calls=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setitem(
+        sys.modules, "openai", SimpleNamespace(OpenAI=_FakeClient)
+    )
+
+    provider = OpenAIProvider(api_key="sk-test-abcdef123456")
+    content_array = [
+        {
+            "type": "text",
+            "text": "AUDIT_RENDER result (isometric, topdown) + aesthetics: {}",
+        },
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD",
+            },
+        },
+    ]
+    sent_messages = [
+        {"role": "system", "content": "SYSPROMPT"},
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "TOOL_CALL audit_render {}"},
+        {"role": "user", "content": content_array},
+    ]
+    turn = provider.next_turn(sent_messages)
+    assert turn.text == "ok"
+
+    sent = captured["messages"]
+    assert all(m["role"] in {"system", "user", "assistant"} for m in sent)
+    assert isinstance(sent[3]["content"], list)
+    assert sent[3]["content"] is content_array or sent[3]["content"] == content_array
+    url = sent[3]["content"][1]["image_url"]["url"]
+    assert url.startswith("data:image/jpeg;base64,")
 
 
 def test_multiple_tool_calls_rejected_to_corrective_text() -> None:
@@ -192,3 +245,50 @@ def test_stderr_tail_redacts_before_truncating() -> None:
     tail = _stderr_tail(blob, chars=400)
     assert "sk-" + "a" * 20 not in tail
     assert "[redacted]" in tail or "aaaa" not in tail
+
+
+def test_bare_unfenced_program_recovers_as_code() -> None:
+    from envmaker.agent.providers import _parse_assistant_message
+
+    source = (
+        "from envmaker.sdk import EnvironmentBuilder, Polygon2D\n\n"
+        "def build_environment():\n"
+        "    b = EnvironmentBuilder('x', seed=1)\n"
+        "    return b.freeze()\n\n"
+        "environment = build_environment()\n"
+    )
+    turn = _parse_assistant_message({"content": source, "tool_calls": None})
+    assert turn.code is not None and "build_environment" in turn.code
+
+    chatty = _parse_assistant_message(
+        {"content": "I think the walls look good now.", "tool_calls": None}
+    )
+    assert chatty.text is not None and chatty.code is None
+
+
+def test_tool_call_mimicry_text_executes_as_tool() -> None:
+    from envmaker.agent.providers import _parse_assistant_message
+
+    turn = _parse_assistant_message(
+        {"content": "TOOL_CALL simulate_navigation {}", "tool_calls": None}
+    )
+    assert turn.tool == "simulate_navigation"
+
+    with_args = _parse_assistant_message(
+        {
+            "content": 'TOOL_CALL probe_environment {"query": "spawn"}',
+            "tool_calls": None,
+        }
+    )
+    assert with_args.tool == "probe_environment"
+    assert with_args.args == {"query": "spawn"}
+
+    unknown = _parse_assistant_message(
+        {"content": "TOOL_CALL write_program {}", "tool_calls": None}
+    )
+    assert unknown.tool is None and unknown.text is not None
+
+    prose = _parse_assistant_message(
+        {"content": "I would call TOOL_CALL next time.", "tool_calls": None}
+    )
+    assert prose.tool is None

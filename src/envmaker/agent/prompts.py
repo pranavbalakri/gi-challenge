@@ -28,8 +28,11 @@ an axis-aligned rectangle (exactly 4 points). Exactly one ground.
 - obstacle(name, *, footprint, height, material) — blocking extruded prop.
 - structure(name, *, footprint, height, kit) — blocking curated structure kit.
 - landmark(name, *, position, kit) — non-blocking landmark kit at a point.
-- scatter(name, *, region, kit, count, min_spacing) — seeded vegetation. \
-`region` MUST equal the ground name; count ∈ [1, 512].
+- prop(name, *, kit, position, yaw=0.0, scale=1.0) — direct landmark/vegetation \
+placement (yaw in degrees, scale 0.5–2.0). Structure kits need structure().
+- scatter(name, *, region, kit, count, min_spacing, yaw_jitter=False, \
+scale_range=None) — seeded vegetation. `region` MUST equal the ground name; \
+count ∈ [1, 512]. Opt-in yaw_jitter / scale_range=(lo,hi) with 0.5≤lo≤hi≤2.0.
 - spawn(name, *, position) — unique agent spawn. Must lie strictly inside ground \
 with 0.4 m margin on all sides and outside all blockers. Exactly one spawn.
 - camera(*, orthographic_size) — unique isometric camera (4.0–100.0). Exactly one.
@@ -38,8 +41,17 @@ with 0.4 m margin on all sides and outside all blockers. Exactly one spawn.
 Binding rules: coordinates |v| ≤ 10000; materials from curated list \
 {default, grass, dirt, stone, rock, wood, water, snow}. Kits (name/category/blocking): \
 stone_ruin/structure/true, timber_hut/structure/true, watchtower/structure/true, \
-obelisk/landmark/false, banner/landmark/false, pine/vegetation/true, \
+obelisk/landmark/false, banner/landmark/false, pine/vegetation/true (conical tree), \
+oak/vegetation/true (round canopy tree), boulder/vegetation/true (rock cluster), \
 shrub/vegetation/false.
+
+COMPOSITION (model places; harness measures only):
+Vary spacing and sizes on purpose (`prop(scale=...)`, `scatter(scale_range=...)`). \
+Group with intent rather than even salting. Keep the spawn→landmark approach open. \
+After compile passes and BEFORE the final simulate_navigation, optionally call \
+audit_render once; judge composition (clusters, voids, sightlines, scale variety, \
+palette) from the images and aesthetics numbers; patch only for clear improvements \
+(budget 2 audits). The loop auto-seals after an all-pass simulate — audit first.
 
 TOOLS (call one per turn after an initial full program):
 - read_program — read current source.
@@ -47,8 +59,9 @@ TOOLS (call one per turn after an initial full program):
 <<<<<<< SEARCH / ======= / >>>>>>> REPLACE (search must occur exactly once).
 - compile_environment — worker + static stages program→scene (V1–V5).
 - probe_environment(query) — read-only: "component <id>" | "bounds" | "blockers" | \
-"spawn" | "route x1 z1 x2 z2".
+"spawn" | "aesthetics" | "route x1 z1 x2 z2".
 - render_environment(view) — "isometric" or "topdown" artifact refs.
+- audit_render — bounded isometric+topdown JPEG feedback + aesthetics (budget 2).
 - simulate_navigation — live stages materialization→camera (connectivity + traverse).
 
 WORKED EXAMPLE (minimal valid program):
@@ -72,6 +85,10 @@ environment = build_environment()
 ```
 
 REPAIR GUIDANCE:
+- The ground IS the world: everything, including the spawn, must sit inside \
+it with 0.4 m margin. If a prompt says spawn "outside" a structure, keep the \
+spawn on the ground but outside that structure's walls — or declare a bigger \
+ground. Spawn errors name the offending blocker and its bounds; use them.
 - Read each signal's code, measurements, and guidance; patch minimally.
 - Prefer search/replace for single-line fixes; recompile before simulating.
 - Spawn-in-blocker fails at freeze (program stage); disconnected clear ground fails \

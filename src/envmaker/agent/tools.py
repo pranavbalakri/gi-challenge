@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64 as _base64
 import copy as _copy
+import io as _io
 import math as _math
 import re as _re
 from dataclasses import dataclass as _dataclass
@@ -29,6 +31,7 @@ from envmaker.core.signals import SignalSeverity as _SignalSeverity
 from envmaker.runlog import RunLog as _RunLog
 from envmaker.runlog import _redact as _redact_value
 from envmaker.sdk import SDK_VERSION as _SDK_VERSION
+from envmaker.sdk.kits import get_kit as _get_kit
 from envmaker.validation import StaticValidation as _StaticValidation
 from envmaker.validation import validate_candidate as _validate_candidate
 from envmaker.validation import validate_static as _validate_static
@@ -38,6 +41,7 @@ __all__ = [
     "CompileResult",
     "ProbeResult",
     "RenderResult",
+    "AuditResult",
     "NavigationResult",
     "ToolContext",
     "ToolSurface",
@@ -46,13 +50,16 @@ __all__ = [
 _SOURCE_CAP = 64 * 1024
 _PATCH_CAP = 16 * 1024
 _SIGNAL_CAP = 32
+_AUDIT_B64_CAP = 200 * 1024
+_AUDIT_BUDGET = 2
+_AUDIT_MAX_WIDTH = 640
 _SEARCH_REPLACE = _re.compile(
     r"^<<<<<<< SEARCH\n(.*)\n=======\n(.*)\n>>>>>>> REPLACE\n?\Z",
     _re.DOTALL,
 )
 _PROBE_GRAMMAR = (
     '"component <semantic_id>" | "bounds" | "blockers" | "spawn" | '
-    '"route <x1> <z1> <x2> <z2>"'
+    '"aesthetics" | "route <x1> <z1> <x2> <z2>"'
 )
 _AGENT_RADIUS = 0.4
 
@@ -118,6 +125,18 @@ class NavigationResult(_BaseModel):
     reason: str = ""
 
 
+class AuditResult(_BaseModel):
+    """Bounded multimodal screenshot audit (JPEG base64 + aesthetics)."""
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    ok: bool
+    refs: tuple[str, ...] = ()
+    images_b64: tuple[str, ...] = ()
+    aesthetics: dict[str, object] = _Field(default_factory=dict)
+    reason: str = ""
+
+
 @_dataclass
 class ToolContext:
     """Mutable tool state for one authoring run."""
@@ -131,6 +150,7 @@ class ToolContext:
     static: _StaticValidation | None = None
     runtime_reports: list[_StageReport] = _field(default_factory=list)
     min_walkable_fraction: float = 0.5
+    successful_audits: int = 0
 
 
 def _source_fingerprint(source: str) -> str:
@@ -345,8 +365,247 @@ def _clearance_to_oriented(
     return _math.hypot(dx, dz)
 
 
+def _prop_keepout_radius(kit: object, scale: float) -> float:
+    reach = 0.0
+    for part in kit.parts:  # type: ignore[attr-defined]
+        if part.shape == "box":
+            assert part.size is not None
+            half_x = part.size[0] / 2.0
+            half_z = part.size[2] / 2.0
+        else:
+            assert part.radius is not None
+            half_x = half_z = float(part.radius)
+        part_reach = max(
+            abs(float(part.offset[0])) + half_x,
+            abs(float(part.offset[2])) + half_z,
+        )
+        reach = max(reach, part_reach)
+    return float(scale) * reach
+
+
+def _placement_origins(
+    model: _EnvironmentModel,
+    candidate: _CandidateScene,
+) -> list[tuple[float, float]]:
+    """Scatter/prop instance origins (each instance's ``.0`` kit-part node)."""
+
+    by_id = {node.semantic_id: node for node in candidate.scene.nodes}
+    origins: list[tuple[float, float]] = []
+    for component in model.components:
+        discriminator = component.payload.get("component")
+        name = component.semantic_id
+        if discriminator == "prop":
+            node = by_id.get(f"{name}.0")
+            if node is not None:
+                origins.append((node.transform.origin.x, node.transform.origin.z))
+        elif discriminator == "scatter":
+            for node in candidate.scene.nodes:
+                parts = node.semantic_id.split(".")
+                if (
+                    len(parts) == 3
+                    and parts[0] == name
+                    and parts[2] == "0"
+                ):
+                    origins.append(
+                        (node.transform.origin.x, node.transform.origin.z)
+                    )
+    return origins
+
+
+def _nearest_neighbor_stats(
+    origins: list[tuple[float, float]],
+) -> tuple[float, float, float, float]:
+    if len(origins) < 2:
+        return 0.0, 0.0, 0.0, 0.0
+    nearest: list[float] = []
+    for index, (x, z) in enumerate(origins):
+        best = min(
+            _math.hypot(x - ox, z - oz)
+            for other, (ox, oz) in enumerate(origins)
+            if other != index
+        )
+        nearest.append(best)
+    nn_min = min(nearest)
+    nn_mean = sum(nearest) / len(nearest)
+    variance = sum((value - nn_mean) ** 2 for value in nearest) / len(nearest)
+    nn_stddev = _math.sqrt(variance)
+    if nn_mean <= 1e-12:
+        cluster_score = 0.0
+    else:
+        cluster_score = nn_stddev / nn_mean
+    return nn_min, nn_mean, nn_stddev, cluster_score
+
+
+def _aesthetics_probe(
+    model: _EnvironmentModel,
+    candidate: _CandidateScene,
+) -> dict[str, object]:
+    origins = _placement_origins(model, candidate)
+    nn_min, nn_mean, nn_stddev, cluster_score = _nearest_neighbor_stats(origins)
+
+    ground = next(
+        (
+            node
+            for node in candidate.scene.nodes
+            if isinstance(node.visual, _PlaneVisual)
+        ),
+        None,
+    )
+    if ground is None or not isinstance(ground.visual, _PlaneVisual):
+        raise ValueError("candidate has no ground plane")
+    ground_area = float(ground.visual.size_x) * float(ground.visual.size_z)
+
+    prop_ids = {
+        component.semantic_id
+        for component in model.components
+        if component.payload.get("component") == "prop"
+    }
+    blocker_area = 0.0
+    for node in candidate.scene.nodes:
+        oriented = _blocker_oriented(node)
+        if oriented is None:
+            continue
+        semantic_id = str(oriented["semantic_id"])
+        if any(
+            semantic_id == prop_id or semantic_id.startswith(f"{prop_id}.")
+            for prop_id in prop_ids
+        ):
+            continue
+        blocker_area += 4.0 * float(oriented["half_x"]) * float(oriented["half_z"])
+
+    for component in model.components:
+        if component.payload.get("component") != "prop":
+            continue
+        kit = _get_kit(str(component.payload["kit"]))
+        if not kit.blocking:
+            continue
+        scale = float(component.payload["scale"])  # type: ignore[arg-type]
+        radius = _prop_keepout_radius(kit, scale)
+        blocker_area += _math.pi * radius * radius
+
+    coverage_fraction = blocker_area / ground_area if ground_area > 0.0 else 0.0
+
+    spawn_id = candidate.scene.controller_semantic_id
+    spawn = next(
+        node for node in candidate.scene.nodes if node.semantic_id == spawn_id
+    )
+    target_id: str | None = None
+    for component in model.components:
+        discriminator = component.payload.get("component")
+        if discriminator == "landmark":
+            target_id = f"{component.semantic_id}.0"
+            break
+        if discriminator == "prop":
+            kit = _get_kit(str(component.payload["kit"]))
+            if kit.category == "landmark":
+                target_id = f"{component.semantic_id}.0"
+                break
+
+    sightline_clear = True
+    sightline_blocker: str | None = None
+    if target_id is not None:
+        target = next(
+            (
+                node
+                for node in candidate.scene.nodes
+                if node.semantic_id == target_id
+            ),
+            None,
+        )
+        if target is not None:
+            x1 = spawn.transform.origin.x
+            z1 = spawn.transform.origin.z
+            x2 = target.transform.origin.x
+            z2 = target.transform.origin.z
+            target_root = target_id.rsplit(".", 1)[0]
+            for node in candidate.scene.nodes:
+                if node.semantic_id == target_root or node.semantic_id.startswith(
+                    f"{target_root}."
+                ):
+                    continue
+                oriented = _blocker_oriented(node)
+                if oriented is None:
+                    continue
+                if _segment_hits_oriented(x1, z1, x2, z2, oriented):
+                    sightline_clear = False
+                    sightline_blocker = node.semantic_id
+                    break
+
+    guidance: list[str] = []
+    if len(origins) >= 2 and cluster_score > 0.6:
+        guidance.append(
+            "placements look clumpy; regroup with purpose or widen spacing"
+        )
+    if coverage_fraction < 0.02 and len(origins) <= 3:
+        guidance.append(
+            "scene looks sparse-and-empty; add deliberate props or denser scatter"
+        )
+    if not sightline_clear:
+        guidance.append(
+            "spawn→landmark sightline is blocked; open a corridor or move the goal"
+        )
+
+    return {
+        "instance_count": len(origins),
+        "nn_min": nn_min,
+        "nn_mean": nn_mean,
+        "nn_stddev": nn_stddev,
+        "cluster_score": cluster_score,
+        "coverage_fraction": coverage_fraction,
+        "sightline_clear": sightline_clear,
+        "sightline_blocker": sightline_blocker,
+        "guidance": guidance,
+    }
+
+
+def _resolve_artifact_path(run_dir: _Path, artifact_path: str) -> _Path:
+    path = _Path(artifact_path)
+    if path.is_file():
+        return path
+    # The default driver factory roots the runtime under run_dir/"runtime",
+    # so driver-relative refs like "artifacts/x.png" live one level down.
+    for base in (run_dir, run_dir / "runtime"):
+        candidate = base / artifact_path
+        if candidate.is_file():
+            return candidate
+    matches = sorted(run_dir.rglob(path.name))
+    if matches:
+        return matches[0]
+    raise FileNotFoundError(f"artifact not found: {artifact_path}")
+
+
+def _encode_audit_jpeg(png_path: _Path) -> str:
+    """Downscale a PNG and return a base64 JPEG string within the hard cap."""
+
+    from PIL import Image as _Image
+
+    with _Image.open(png_path) as image:
+        working = image.convert("RGB")
+        if working.width > _AUDIT_MAX_WIDTH:
+            ratio = _AUDIT_MAX_WIDTH / float(working.width)
+            height = max(1, int(round(working.height * ratio)))
+            working = working.resize(
+                (_AUDIT_MAX_WIDTH, height),
+                _Image.Resampling.LANCZOS,
+            )
+
+        def _encode(quality: int) -> str:
+            buffer = _io.BytesIO()
+            working.save(buffer, format="JPEG", quality=quality, optimize=True)
+            return _base64.b64encode(buffer.getvalue()).decode("ascii")
+
+        encoded = _encode(70)
+        if len(encoded.encode("utf-8")) > _AUDIT_B64_CAP:
+            encoded = _encode(45)
+        if len(encoded.encode("utf-8")) > _AUDIT_B64_CAP:
+            raise ValueError(
+                f"encoded audit image exceeds {_AUDIT_B64_CAP} byte cap"
+            )
+        return encoded
+
+
 class ToolSurface:
-    """The agent's complete six-tool authoring surface."""
+    """The agent's complete seven-tool authoring surface."""
 
     def __init__(self, context: ToolContext) -> None:
         self.context = context
@@ -581,6 +840,11 @@ class ToolSurface:
                 "clearances": clearances,
             }
 
+        if text == "aesthetics":
+            if model is None:
+                raise ValueError("aesthetics probe requires a compiled model")
+            return _aesthetics_probe(model, candidate)
+
         route_match = _re.fullmatch(
             r"route\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+"
             r"([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)",
@@ -647,6 +911,90 @@ class ToolSurface:
                 "ok": result.ok,
                 "artifact_path": result.artifact_path,
                 "byte_count": result.byte_count,
+            },
+        )
+        return result
+
+    def audit_render(self) -> AuditResult:
+        """Capture both views, encode bounded JPEGs, and attach aesthetics."""
+
+        if self.context.successful_audits >= _AUDIT_BUDGET:
+            result = AuditResult(
+                ok=False,
+                reason="audit budget exhausted (2 per run)",
+            )
+            self._log("audit_render", {}, {"ok": False, "reason": result.reason})
+            return result
+        if self.context.driver is None:
+            result = AuditResult(
+                ok=False,
+                reason="driver unavailable in static context",
+            )
+            self._log("audit_render", {}, {"ok": False, "reason": result.reason})
+            return result
+
+        static = self.context.static
+        if (
+            static is None
+            or static.model is None
+            or static.candidate is None
+            or not static.reports
+            or not all(report.passed for report in static.reports)
+        ):
+            result = AuditResult(
+                ok=False,
+                reason="audit requires a prior successful compile",
+            )
+            self._log("audit_render", {}, {"ok": False, "reason": result.reason})
+            return result
+
+        try:
+            load = getattr(self.context.driver, "load_candidate", None)
+            if callable(load):
+                response = load(static.candidate)
+                if response is not None and hasattr(response, "ok") and not response.ok:
+                    raise RuntimeError("load_candidate returned a non-ok response")
+                # Settle the navigation bake the load kicked off; leaving it
+                # in flight wedges every later load with "bake in progress".
+                wait_ready = getattr(
+                    self.context.driver, "wait_navigation_ready", None
+                )
+                if callable(wait_ready):
+                    wait_ready(30.0)
+
+            refs: list[str] = []
+            images: list[str] = []
+            for view in ("isometric", "topdown"):
+                artifact = self.context.driver.render(view)
+                path = str(getattr(artifact, "path", ""))
+                digest = str(getattr(artifact, "blake2b256", ""))
+                byte_count = int(getattr(artifact, "byte_count", 0))
+                if byte_count <= 0 or len(digest) != 64 or not path:
+                    raise RuntimeError("render artifact is not verified")
+                png_path = _resolve_artifact_path(self.context.run_dir, path)
+                images.append(_encode_audit_jpeg(png_path))
+                refs.append(path)
+
+            aesthetics = _aesthetics_probe(static.model, static.candidate)
+            result = AuditResult(
+                ok=True,
+                refs=tuple(refs),
+                images_b64=tuple(images),
+                aesthetics=aesthetics,
+            )
+            self.context.successful_audits += 1
+        except Exception as exc:
+            result = AuditResult(ok=False, reason=f"audit failed: {exc}")
+
+        self._log(
+            "audit_render",
+            {},
+            {
+                "ok": result.ok,
+                "refs": list(result.refs),
+                "byte_sizes": [len(item.encode("utf-8")) for item in result.images_b64],
+                "aesthetics": result.aesthetics,
+                "reason": result.reason,
             },
         )
         return result

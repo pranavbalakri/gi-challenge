@@ -31,7 +31,7 @@ class KitPart(_BaseModel):
 
     model_config = _ConfigDict(frozen=True, extra="forbid")
 
-    shape: _Literal["box", "cylinder"]
+    shape: _Literal["box", "cylinder", "sphere", "cone"]
     offset: tuple[float, float, float]
     size: tuple[float, float, float] | None = None
     radius: float | None = None
@@ -48,6 +48,17 @@ class KitPart(_BaseModel):
             if size is None or self.radius is not None or self.height is not None:
                 raise ValueError("box parts take size only")
             dimensions = size
+        elif self.shape == "sphere":
+            radius = self.radius
+            if radius is None or self.height is not None or self.size is not None:
+                raise ValueError("sphere parts take radius only")
+            dimensions = (radius,)
+        elif self.shape == "cone":
+            radius = self.radius
+            height = self.height
+            if radius is None or height is None or self.size is not None:
+                raise ValueError("cone parts take radius and height only")
+            dimensions = (radius, height)
         else:
             radius = self.radius
             height = self.height
@@ -247,22 +258,68 @@ KITS: dict[str, Kit] = {
         parts=(
             KitPart(
                 shape="cylinder",
-                offset=(0.0, 0.7, 0.0),
-                radius=0.18,
-                height=1.4,
+                offset=(0.0, 1.0, 0.0),
+                radius=0.22,
+                height=2.0,
                 material="wood",
             ),
             KitPart(
-                shape="box",
-                offset=(0.0, 1.6, 0.0),
-                size=(1.6, 1.0, 1.6),
+                shape="cone",
+                offset=(0.0, 3.2, 0.0),
+                radius=1.3,
+                height=2.8,
+                material="grass",
+            ),
+        ),
+    ),
+    "oak": Kit(
+        name="oak",
+        category="vegetation",
+        blocking=True,
+        parts=(
+            KitPart(
+                shape="cylinder",
+                offset=(0.0, 1.2, 0.0),
+                radius=0.32,
+                height=2.4,
+                material="wood",
+            ),
+            KitPart(
+                shape="sphere",
+                offset=(0.0, 3.1, 0.0),
+                radius=1.5,
                 material="grass",
             ),
             KitPart(
-                shape="box",
-                offset=(0.0, 2.45, 0.0),
-                size=(1.1, 0.9, 1.1),
+                shape="sphere",
+                offset=(0.75, 2.8, 0.5),
+                radius=1.15,
                 material="grass",
+            ),
+            KitPart(
+                shape="sphere",
+                offset=(-0.6, 2.85, -0.4),
+                radius=1.0,
+                material="grass",
+            ),
+        ),
+    ),
+    "boulder": Kit(
+        name="boulder",
+        category="vegetation",
+        blocking=True,
+        parts=(
+            KitPart(
+                shape="sphere",
+                offset=(0.0, 0.45, 0.0),
+                radius=1.2,
+                material="rock",
+            ),
+            KitPart(
+                shape="sphere",
+                offset=(0.75, 0.3, 0.25),
+                radius=0.7,
+                material="rock",
             ),
         ),
     ),

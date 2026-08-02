@@ -7,6 +7,9 @@ const AGENT_COLOR := Color(0.85, 0.2, 0.55)
 var _agent: NavigationAgent3D = null
 var _map := RID()
 var _visual: Node3D = null
+var _wander := false
+var _wander_speed := 3.0
+var _wander_target := Vector3.ZERO
 
 
 func setup(map: RID) -> void:
@@ -59,6 +62,7 @@ func run_episode(
 	stuck_timeout_ticks: int,
 	speed: float,
 ) -> Dictionary:
+	_wander = false
 	var planned := _route_length(global_position, target)
 	var ticks := 0
 	var travelled := 0.0
@@ -109,6 +113,48 @@ func run_episode(
 		"stuck_recoveries": 0,
 		"planned_path_length_m": planned,
 	}
+
+
+func start_wander(speed: float = 3.0) -> void:
+	## Continuous plausible traversal: walk to random navmesh points forever.
+	## The navmesh already excludes water and carves around blockers, so the
+	## wander stays on legal ground by construction.
+	_wander_speed = speed
+	_wander = true
+	_pick_wander_target()
+
+
+func stop_wander() -> void:
+	_wander = false
+
+
+func _pick_wander_target() -> void:
+	var point := NavigationServer3D.map_get_random_point(_map, 1, true)
+	_wander_target = point
+	_agent.target_position = point
+
+
+func _physics_process(_delta: float) -> void:
+	if not _wander:
+		return
+	var planar_target := Vector3(_wander_target.x, global_position.y, _wander_target.z)
+	if global_position.distance_to(planar_target) <= 1.0:
+		_pick_wander_target()
+		return
+	var next := _agent.get_next_path_position()
+	var direction := next - global_position
+	direction.y = 0.0
+	var new_velocity := Vector3.ZERO
+	if direction.length() > 0.01:
+		new_velocity = direction.normalized() * _wander_speed
+	new_velocity.y = velocity.y - GRAVITY * PHYSICS_DELTA
+	if is_on_floor():
+		new_velocity.y = maxf(new_velocity.y, 0.0)
+	velocity = new_velocity
+	move_and_slide()
+	var planar := Vector3(velocity.x, 0.0, velocity.z)
+	if _visual != null and planar.length() > 0.05:
+		_visual.rotation.y = atan2(-planar.x, -planar.z)
 
 
 func _route_length(from: Vector3, to: Vector3) -> float:

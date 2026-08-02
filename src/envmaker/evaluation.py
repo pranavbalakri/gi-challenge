@@ -592,7 +592,9 @@ def write_report(
     lines.append(f"- model: `{config.get('model', '')}`")
     lines.append(f"- prompt_version: `{config.get('prompt_version', '')}`")
     if config.get("eval_root"):
-        lines.append(f"- eval_root: `{config['eval_root']}`")
+        lines.append(
+            f"- eval_root: `{_repo_relative(str(config['eval_root']))}`"
+        )
     lines.append(f"- cells: {len(results)}")
     lines.append("")
     lines.append("## Aggregate by variant")

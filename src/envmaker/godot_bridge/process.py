@@ -148,6 +148,15 @@ class GodotProcess:
             for name in _sanitized_env_names()
             if name in os.environ
         }
+        # Presentation/behavior knobs read by GDScript (iso pitch, visual
+        # scale, wander, resolution) must survive env sanitization.
+        child_env.update(
+            {
+                name: value
+                for name, value in os.environ.items()
+                if name.startswith("ENVMAKER_") and name not in child_env
+            }
+        )
         child_env.update(
             {
                 ENV_HOST: self._host,

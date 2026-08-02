@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json as _json
+import os as _os
 import re as _re
 import secrets as _secrets
+import sys as _sys
 import subprocess as _subprocess
 import traceback as _traceback
 import uuid as _uuid
@@ -35,7 +37,7 @@ app = typer.Typer(name="envmaker", no_args_is_help=True, add_completion=False)
 _REPO_ROOT = _Path(__file__).resolve().parents[2]
 _RUNS_ROOT = _REPO_ROOT / "runs"
 _DEMO_SOURCE = _REPO_ROOT / "examples" / "demo" / "environment.py"
-_VIEW_WINDOW_ARGS = ("--resolution", "1280x720", "--position", "100,100")
+_VIEW_WINDOW_ARGS = ("--maximized",)
 _ZERO_FAILURES = _re.compile(r"(?<!\d)0 failures")
 _STAGE_ORDER = tuple(
     stage.value
@@ -113,7 +115,7 @@ def run_demo_pipeline(
     view: bool = False,
     run_dir: _Path | None = None,
     source: str | None = None,
-    hold_seconds: float = 8.0,
+    hold_seconds: float | None = None,
 ) -> DemoOutcome:
     """Keyless demo: static + runtime validators, navigate, render, seal."""
 
@@ -201,14 +203,28 @@ def run_demo_pipeline(
         except Exception:
             pass
 
-        if view and hold_seconds > 0:
-            # End on the isometric frame (not the top-down capture flash) and
-            # keep the window up so the traversal result can actually be seen.
+        if view:
+            # End on the isometric frame (not the top-down capture flash),
+            # then keep the world open with the agent wandering goallessly:
+            # for N seconds when --hold N was given, else until the window is
+            # closed or Ctrl-C.
             try:
                 driver.render("isometric")
             except Exception:
                 pass
-            _time.sleep(hold_seconds)
+            if hold_seconds is not None:
+                if hold_seconds > 0:
+                    _time.sleep(hold_seconds)
+            else:
+                typer.echo(
+                    "environment open — close the window or press Ctrl-C "
+                    "to exit"
+                )
+                try:
+                    while getattr(driver, "is_running", lambda: False)():
+                        _time.sleep(0.5)
+                except KeyboardInterrupt:
+                    pass
 
         bundle = _full_bundle(static, runtime_reports)
         if bundle.all_passed():
@@ -313,6 +329,148 @@ def _print_demo_outcome(outcome: DemoOutcome) -> None:
     typer.echo(f"run_dir: {outcome.run_dir}")
 
 
+_DIAGNOSIS_FAMILIES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "spawn placement",
+        (
+            "spawn must lie on the ground",
+            "spawn intersects a blocker",
+            "v5.spawn_intersects_blocker",
+        ),
+        "every attempt died on spawn placement. The rules require the spawn "
+        "to sit ON the ground with 0.4 m clearance and outside every "
+        "blocker; a prompt like \"spawn outside X\" only works if the ground "
+        "extends beyond X. Rephrase to keep the spawn on land or ask for a "
+        "bigger ground.",
+    ),
+    (
+        "materials",
+        ("unknown material",),
+        "the prompt keeps requesting materials outside the curated set. "
+        "Available: grass, dirt, stone, rock, wood, water, snow, default.",
+    ),
+    (
+        "kits",
+        ("unknown kit", "kit category"),
+        "the prompt keeps requesting assets outside the curated kits. "
+        "Available: stone_ruin, timber_hut, watchtower (structures); "
+        "obelisk, banner (landmarks); pine, shrub (vegetation).",
+    ),
+    (
+        "ground shape",
+        ("axis-aligned rectangle",),
+        "the prompt requires a non-rectangular ground; the current rules "
+        "materialize exactly one axis-aligned rectangular ground.",
+    ),
+    (
+        "connectivity",
+        ("v6.clear_ground_fraction",),
+        "the requested layout seals off most of the walkable ground; keep "
+        "an open corridor so the map stays connected.",
+    ),
+)
+
+
+def diagnose_failed_attempts(run_dirs: list[_Path]) -> str:
+    """Heuristic post-mortem across preserved runlogs.
+
+    A single constraint family dominating every attempt is the fingerprint of
+    a structurally unworkable prompt; scattered one-off failures are model
+    noise. This inspects only typed signals — no semantic judging.
+    """
+
+    family_hits: dict[str, int] = {}
+    total_hits = 0
+    for run_dir in run_dirs:
+        runlog = _Path(run_dir) / "runlog.jsonl"
+        if not runlog.is_file():
+            continue
+        for line in runlog.read_text(encoding="utf-8").splitlines():
+            try:
+                event = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            if event.get("kind") != "tool_call":
+                continue
+            payload = event.get("payload", {})
+            haystack = " ".join(
+                (
+                    " ".join(str(c) for c in payload.get("signal_codes") or ()),
+                    str(payload.get("signal_messages", "")),
+                )
+            )
+            if not haystack.strip():
+                continue
+            for family, needles, _advice in _DIAGNOSIS_FAMILIES:
+                if any(needle in haystack for needle in needles):
+                    family_hits[family] = family_hits.get(family, 0) + 1
+                    total_hits += 1
+                    break
+
+    if total_hits >= 2:
+        family, hits = max(family_hits.items(), key=lambda item: item[1])
+        if hits >= 2 and hits * 10 >= total_hits * 6:
+            advice = next(
+                advice
+                for name, _needles, advice in _DIAGNOSIS_FAMILIES
+                if name == family
+            )
+            return (
+                f"structural ({family}, {hits} occurrences across "
+                f"{len(run_dirs)} attempt(s)): {advice}"
+            )
+    return (
+        "no single structural blocker detected: the model failed to "
+        "converge within budget. Retry with more --attempts, a larger "
+        "--max-turns, or a stronger --model."
+    )
+
+
+def present_environment(final_source: str, run_dir: _Path) -> None:
+    """Open an accepted environment fullscreen with a goallessly wandering
+    agent, until the window is closed or Ctrl-C."""
+
+    from envmaker.runtime import RuntimeDriver
+
+    static = _validate_static(final_source, limits=_DEFAULT_LIMITS)
+    if static.candidate is None:
+        typer.echo("presentation skipped: final source no longer compiles")
+        return
+
+    previous_wander = _os.environ.get("ENVMAKER_WANDER")
+    _os.environ["ENVMAKER_WANDER"] = "1"
+    driver = None
+    try:
+        driver = RuntimeDriver(
+            run_dir=_Path(run_dir) / "present",
+            session_id="present-" + _uuid.uuid4().hex[:12],
+            windowed=True,
+            window_args=_VIEW_WINDOW_ARGS,
+        )
+        driver.start()
+        driver.load_candidate(static.candidate)
+        driver.wait_navigation_ready(30.0)
+        typer.echo(
+            "environment open — close the window or press Ctrl-C to exit"
+        )
+        while driver.is_running():
+            _time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    except Exception as exc:
+        typer.echo(f"presentation failed: {exc}")
+    finally:
+        if previous_wander is None:
+            _os.environ.pop("ENVMAKER_WANDER", None)
+        else:
+            _os.environ["ENVMAKER_WANDER"] = previous_wander
+        if driver is not None:
+            try:
+                driver.close()
+            except Exception:
+                pass
+
+
 def _format_event_line(kind: str, payload: dict[str, _Any]) -> str:
     if kind == "signals":
         codes = payload.get("signal_codes") or []
@@ -328,8 +486,17 @@ def _format_event_line(kind: str, payload: dict[str, _Any]) -> str:
     if kind == "tool_call":
         codes = payload.get("signal_codes") or []
         code_part = f" codes={','.join(str(c) for c in codes)}" if codes else ""
+        message_part = ""
+        messages_text = str(payload.get("signal_messages", "")).strip()
+        if codes and messages_text:
+            # The last non-empty line of a traceback-bearing message is the
+            # exception itself; the first is just the frame header.
+            lines = [l for l in messages_text.splitlines() if l.strip()]
+            display = lines[-1] if len(lines) > 1 else lines[0]
+            message_part = f" | {display.strip()[:160]}"
         return (
-            f"tool_call {payload.get('name')} ok={payload.get('ok')}{code_part}"
+            f"tool_call {payload.get('name')} "
+            f"ok={payload.get('ok')}{code_part}{message_part}"
         )
     if kind == "outcome":
         return f"outcome {payload.get('terminal_state')}"
@@ -352,10 +519,13 @@ def demo(
         "--view",
         help="Visible window; replay automated traversal on screen.",
     ),
-    hold: float = typer.Option(
-        8.0,
+    hold: float | None = typer.Option(
+        None,
         "--hold",
-        help="Seconds to keep the --view window open after validation.",
+        help=(
+            "Seconds to keep the --view window open after validation "
+            "(default: stay open until Enter is pressed)."
+        ),
     ),
 ) -> None:
     """Run the checked-in village-green fixture through all hard validators."""
@@ -363,7 +533,18 @@ def demo(
     if headless and view:
         raise typer.BadParameter("use only one of --headless or --view")
     use_view = bool(view)
-    outcome = run_demo_pipeline(view=use_view, hold_seconds=hold)
+    previous_wander = _os.environ.get("ENVMAKER_WANDER")
+    if use_view:
+        # The agent wanders the navmesh while the window stays open.
+        _os.environ["ENVMAKER_WANDER"] = "1"
+    try:
+        outcome = run_demo_pipeline(view=use_view, hold_seconds=hold)
+    finally:
+        if use_view:
+            if previous_wander is None:
+                _os.environ.pop("ENVMAKER_WANDER", None)
+            else:
+                _os.environ["ENVMAKER_WANDER"] = previous_wander
     _print_demo_outcome(outcome)
     raise typer.Exit(0 if outcome.ok else 1)
 
@@ -372,12 +553,25 @@ def demo(
 def run(
     prompt: str = typer.Argument(..., help="Natural-language environment prompt."),
     seed: int = typer.Option(7, "--seed", help="Deterministic authoring seed."),
-    max_turns: int = typer.Option(8, "--max-turns", help="Provider turn budget."),
+    max_turns: int = typer.Option(12, "--max-turns", help="Provider turn budget."),
     wall_seconds: float = typer.Option(
         600.0, "--wall-seconds", help="Wall-clock budget seconds."
     ),
     model: str = typer.Option(
         "gpt-4o-mini", "--model", help="OpenAI chat model name."
+    ),
+    attempts: int = typer.Option(
+        2,
+        "--attempts",
+        min=1,
+        help="Fresh authoring attempts before giving up (retries budget "
+        "exhaustion and provider errors; never harness errors).",
+    ),
+    open_view: bool | None = typer.Option(
+        None,
+        "--open/--no-open",
+        help="Open the accepted environment fullscreen with a wandering "
+        "agent (default: open when the terminal is interactive).",
     ),
 ) -> None:
     """Live authoring loop with streamed runlog events."""
@@ -386,29 +580,52 @@ def run(
     from envmaker.agent.providers import OpenAIProvider
 
     try:
-        run_dir = allocate_run_dir(_RUNS_ROOT)
-        typer.echo(f"run_dir: {run_dir}")
 
         def _on_event(kind: str, payload: dict) -> None:
             typer.echo(_format_event_line(kind, payload))
 
         try:
-            provider = OpenAIProvider(model_name=model)
+            provider_probe = OpenAIProvider(model_name=model)
         except Exception as exc:
             typer.echo(f"provider_error: {exc}")
             raise typer.Exit(1) from exc
 
-        outcome = run_authoring(
-            prompt,
-            provider=provider,
-            seed=seed,
-            max_turns=max_turns,
-            wall_seconds=wall_seconds,
-            run_dir=run_dir,
-            on_event=_on_event,
-        )
-        typer.echo(f"terminal_state: {outcome.terminal_state}")
-        typer.echo(f"run_dir: {outcome.run_dir}")
+        outcome = None
+        attempt_dirs: list[_Path] = []
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                typer.echo(f"attempt {attempt}/{attempts} (fresh context)")
+                provider_probe = OpenAIProvider(model_name=model)
+            run_dir = allocate_run_dir(_RUNS_ROOT)
+            attempt_dirs.append(run_dir)
+            typer.echo(f"run_dir: {run_dir}")
+            outcome = run_authoring(
+                prompt,
+                provider=provider_probe,
+                seed=seed,
+                max_turns=max_turns,
+                wall_seconds=wall_seconds,
+                run_dir=run_dir,
+                on_event=_on_event,
+            )
+            typer.echo(f"terminal_state: {outcome.terminal_state}")
+            typer.echo(f"run_dir: {outcome.run_dir}")
+            if outcome.terminal_state in {"accepted", "harness_error"}:
+                break
+
+        assert outcome is not None
+        if outcome.terminal_state != "accepted":
+            typer.echo(
+                f"prompt_diagnosis: {diagnose_failed_attempts(attempt_dirs)}"
+            )
+        elif outcome.final_source:
+            should_open = (
+                open_view
+                if open_view is not None
+                else bool(_sys.stdout is not None and _sys.stdout.isatty())
+            )
+            if should_open:
+                present_environment(outcome.final_source, attempt_dirs[-1])
         if outcome.terminal_state in {"accepted", "rejected_after_budget"}:
             raise typer.Exit(0)
         raise typer.Exit(1)

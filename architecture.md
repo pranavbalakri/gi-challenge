@@ -12,7 +12,7 @@ The MVP is deliberately **3D-lite**: visually 3D and isometric, logically close 
 
 ## Current implementation state
 
-Complete and frozen (see `.superpowers/sdd/interfaces.md` and the ledger):
+Complete and frozen (interface signatures are pinned by the test suite):
 
 - **Toolchain:** Python 3.12 via uv; Godot 4.7.1 at `tools/godot/`; `scripts/verify_toolchain.py` hard-gates both.
 - **Core contracts (`envmaker.core`):** canonical fingerprints and content-addressed `ArtifactRef`/`ArtifactManifest` (BLAKE2b-256 identity + SHA-256 engine digest); bounded typed `Signal`s; `PromptRequirementSet`; `EnvironmentProgram` + fault-containment `WorkerExecution` records; metre-based `Vec3`/`Transform3D`; `EnvironmentModel`; `GodotSceneSpec`/`CandidateScene`; `WorldSnapshot`/`ObservationPacket`/`ControllerAction`; `NavigationProbe`/`EpisodeResult`; nine-stage `ValidationBundle`; `seal_definition`/`require_definition` with the candidate-vs-accepted type separation.

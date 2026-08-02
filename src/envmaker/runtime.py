@@ -324,6 +324,11 @@ class RuntimeDriver:
                 raise RuntimeDriverError(self._error_code(response))
             return WorldSnapshot.model_validate(response.payload)
 
+    def is_running(self) -> bool:
+        """True while the owned Godot process is alive (window still open)."""
+        process = self._process
+        return process is not None and process.running
+
     def render(
         self,
         view: Literal["isometric", "topdown"],

@@ -19,10 +19,14 @@ from envmaker.core.model import Transform3D as _Transform3D
 from envmaker.core.model import Vec3 as _Vec3
 from envmaker.core.program import ResourceLimits as _ResourceLimits
 from envmaker.core.program import WorkerExitReason as _WorkerExitReason
+from envmaker.core.scene_spec import BoxVisual as _BoxVisual
 from envmaker.core.scene_spec import CandidateScene as _CandidateScene
 from envmaker.core.scene_spec import ColliderShape as _ColliderShape
+from envmaker.core.scene_spec import CylinderVisual as _CylinderVisual
 from envmaker.core.scene_spec import PlaneVisual as _PlaneVisual
+from envmaker.core.scene_spec import RibbonVisual as _RibbonVisual
 from envmaker.core.scene_spec import SceneNode as _SceneNode
+from envmaker.core.scene_spec import SphereVisual as _SphereVisual
 from envmaker.core.signals import Signal as _Signal
 from envmaker.core.signals import SignalSeverity as _SignalSeverity
 from envmaker.sdk import SDK_VERSION as _SDK_VERSION
@@ -47,12 +51,13 @@ _KNOWN_COMPONENTS = frozenset(
         "obstacle",
         "structure",
         "landmark",
+        "prop",
         "scatter",
         "spawn",
         "camera",
     }
 )
-_KIT_COMPONENTS = frozenset({"structure", "landmark", "scatter"})
+_KIT_COMPONENTS = frozenset({"structure", "landmark", "prop", "scatter"})
 _AGENT_RADIUS = 0.4
 _ORTHONORMAL_TOL = 1e-6
 _MAX_COORD = 10000.0
@@ -82,9 +87,10 @@ class StaticValidation:
 class RuntimeDriverLike(_Protocol):
     """Duck-typed runtime seam used by live-runtime validators.
 
-    Real ``RuntimeDriver`` methods used: ``load_candidate``, ``wait_navigation_ready``,
-    ``navigate``, ``render``. Stubs (and a future driver shim) also expose
-    ``connected_clear_ground_fraction`` so connectivity math stays in validation.py.
+    Methods used: ``load_candidate``, ``wait_navigation_ready``, ``navigate``,
+    ``render``, and ``connected_clear_ground_fraction`` — the real
+    ``RuntimeDriver`` implements all five (test stubs may expose the zero-arg
+    form of the connectivity probe).
     """
 
     def load_candidate(self, candidate: _CandidateScene) -> object: ...
@@ -446,10 +452,41 @@ def _check_asset(candidate: _CandidateScene) -> _StageReport:
             values: list[float] = []
             if isinstance(visual, _PlaneVisual):
                 values = [visual.size_x, visual.size_z]
-            elif hasattr(visual, "size"):
+            elif isinstance(visual, _BoxVisual):
                 values = list(visual.size)
-            else:
+            elif isinstance(visual, _SphereVisual):
+                values = [float(visual.radius)]
+            elif isinstance(visual, _CylinderVisual):
+                # Cones use top_radius=0; only radius/height must be > 0.
                 values = [float(visual.radius), float(visual.height)]
+                if visual.top_radius is not None and (
+                    not _math.isfinite(visual.top_radius)
+                    or visual.top_radius < 0.0
+                    or abs(visual.top_radius) > _MAX_COORD
+                ):
+                    signals.append(
+                        _failure(
+                            "v4.invalid_dimensions",
+                            "visual dimensions must be finite, positive, and in bounds",
+                            subject_ids=(node.semantic_id,),
+                            guidance="rebuild geometry with positive finite dimensions within +/- 10000",
+                        )
+                    )
+            elif isinstance(visual, _RibbonVisual):
+                values = [float(visual.width)]
+                if any(
+                    not _math.isfinite(component) or abs(component) > _MAX_COORD
+                    for point in visual.points
+                    for component in point
+                ):
+                    signals.append(
+                        _failure(
+                            "v4.coordinate_bounds",
+                            "node origin exceeds world coordinate bounds",
+                            subject_ids=(node.semantic_id,),
+                            guidance="keep authored geometry within +/- 10000 metres",
+                        )
+                    )
             if any(
                 not _math.isfinite(value) or value <= 0.0 or abs(value) > _MAX_COORD
                 for value in values

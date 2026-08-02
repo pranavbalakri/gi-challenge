@@ -174,11 +174,11 @@ def _money_kind_sequence(events: list[dict]) -> list[object]:
     return sequence
 
 
-def test_frozen_village_walkable_fraction_math() -> None:
+def test_frozen_village_walkable_fraction_math(tmp_path: Path) -> None:
     """Pure-geometry check: blocked gate ≈0.46; open gate ≈1.0 (clear-ground denom)."""
 
     rev1 = (_FIXTURE / "rev1.py").read_text(encoding="utf-8")
-    td = Path(tempfile.mkdtemp())
+    td = tmp_path
     from envmaker.agent.tools import ToolContext
     from envmaker.runlog import RunLog
 
@@ -747,7 +747,7 @@ def test_narration_text_turn_gets_action_nudge(tmp_path: Path) -> None:
     from envmaker.agent.providers import ProviderTurn, ScriptedProvider
     from envmaker.core.program import ProviderInfo
 
-    demo_source = Path("examples/demo/environment.py").read_text()
+    demo_source = (_REPO_ROOT / "examples/demo/environment.py").read_text()
     provider = ScriptedProvider(
         [
             ProviderTurn(code=demo_source),
@@ -777,3 +777,299 @@ def test_narration_text_turn_gets_action_nudge(tmp_path: Path) -> None:
         if json.loads(line)["kind"] == "nudge"
     ]
     assert any(n["payload"].get("reason") == "narration" for n in nudges)
+
+
+def test_text_while_static_failing_gets_corrective_nudge(tmp_path: Path) -> None:
+    import json
+
+    from envmaker.agent.providers import ProviderTurn, ScriptedProvider
+    from envmaker.core.program import ProviderInfo
+
+    provider = ScriptedProvider(
+        [
+            ProviderTurn(code="def build_environment():\n    raise RuntimeError('boom')\n\nenvironment = build_environment()\n"),
+            ProviderTurn(tool="compile_environment"),
+            ProviderTurn(text="TOOL_CALL compile_environment {}"),
+        ],
+        descriptor=ProviderInfo(
+            provider="scripted", model_name="fixture", prompt_version="1"
+        ),
+    )
+    outcome = run_authoring(
+        "mimicry probe",
+        provider=provider,
+        seed=1,
+        max_turns=3,
+        wall_seconds=60.0,
+        run_dir=tmp_path,
+        driver_factory=lambda run_dir: (_ for _ in ()).throw(
+            AssertionError("driver must not start")
+        ),
+        limits=_LIMITS,
+    )
+    assert outcome.terminal_state in {"rejected_after_budget", "provider_error"}
+    nudges = [
+        json.loads(line)["payload"].get("reason")
+        for line in open(tmp_path / "runlog.jsonl")
+        if json.loads(line)["kind"] == "nudge"
+    ]
+    assert "text while static failing" in nudges
+
+
+class _SpyProvider:
+    """Records every messages list passed to next_turn."""
+
+    def __init__(self, turns: list[ProviderTurn], *, descriptor: ProviderInfo) -> None:
+        import copy
+
+        self._copy = copy.deepcopy
+        self._turns = list(turns)
+        self._index = 0
+        self._descriptor = descriptor
+        self.seen: list[list[dict[str, object]]] = []
+
+    @property
+    def descriptor(self) -> ProviderInfo:
+        return self._descriptor
+
+    def next_turn(self, messages: list[dict[str, object]]) -> ProviderTurn:
+        self.seen.append(self._copy(messages))
+        if self._index >= len(self._turns):
+            from envmaker.agent.providers import ProviderError
+
+            raise ProviderError("scripted provider transcript exhausted")
+        turn = self._turns[self._index]
+        self._index += 1
+        return turn
+
+
+def _image_message_count(messages: list[dict[str, object]]) -> int:
+    count = 0
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(part, dict) and part.get("type") == "image_url"
+            for part in content
+        ):
+            count += 1
+    return count
+
+
+def test_audit_render_loop_multimodal_and_runlog_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+    import json
+
+    from PIL import Image
+
+    import envmaker.agent.tools as tools_mod
+
+    demo_source = (_REPO_ROOT / "examples/demo/environment.py").read_text(
+        encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        tools_mod,
+        "_encode_audit_jpeg",
+        lambda path: "dGVzdGpwZWc=",  # "testjpeg"
+    )
+
+    class _AuditStubDriver(_RepairStubDriver):
+        def __init__(self, run_dir: Path) -> None:
+            super().__init__()
+            self._run_dir = run_dir
+
+        def connected_clear_ground_fraction(self) -> float:
+            return 0.95
+
+        def render(self, view: str) -> ArtifactRef:
+            rel = f"renders/{view}.png"
+            abs_path = self._run_dir / rel
+            abs_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (8, 8), (10, 20, 30)).save(abs_path, format="PNG")
+            data = abs_path.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            return ArtifactRef(
+                path=rel,
+                media_type="image/png",
+                byte_count=len(data),
+                blake2b256=digest,
+                sha256=digest,
+                producer="stub",
+                toolchain_version="test",
+            )
+
+    provider = _SpyProvider(
+        [
+            ProviderTurn(code=demo_source),
+            ProviderTurn(tool="compile_environment", args={}),
+            ProviderTurn(tool="audit_render", args={}),
+            ProviderTurn(tool="simulate_navigation", args={}),
+        ],
+        descriptor=_descriptor(),
+    )
+    outcome = run_authoring(
+        _PROMPT,
+        provider=provider,  # type: ignore[arg-type]
+        seed=7,
+        max_turns=8,
+        wall_seconds=60.0,
+        run_dir=tmp_path,
+        driver_factory=lambda run_dir: _AuditStubDriver(run_dir),
+        limits=_LIMITS,
+    )
+    assert outcome.terminal_state == "accepted"
+    assert outcome.bundle_sealed is True
+
+    # After audit, the next provider turn sees exactly one content-array user msg.
+    post_audit = provider.seen[3]
+    content_arrays = [
+        message
+        for message in post_audit
+        if isinstance(message.get("content"), list)
+    ]
+    assert len(content_arrays) == 1
+    parts = content_arrays[0]["content"]
+    assert isinstance(parts, list)
+    assert parts[0]["type"] == "text"
+    assert "AUDIT_RENDER result" in str(parts[0]["text"])
+    assert parts[1]["type"] == "image_url"
+    assert str(parts[1]["image_url"]["url"]).startswith("data:image/jpeg;base64,")
+    assert _image_message_count(post_audit) == 1
+
+    runlog_text = (tmp_path / "runlog.jsonl").read_text(encoding="utf-8")
+    assert "base64" not in runlog_text
+    assert "dGVzdGpwZWc=" not in runlog_text
+    assert "data:image" not in runlog_text
+    # No suspiciously long string payloads in the jsonl.
+    for line in runlog_text.splitlines():
+        event = json.loads(line)
+        blob = json.dumps(event, sort_keys=True)
+        assert len(blob) < 20_000
+
+
+def test_second_audit_evicts_first_image_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+
+    from PIL import Image
+
+    import envmaker.agent.tools as tools_mod
+
+    demo_source = (_REPO_ROOT / "examples/demo/environment.py").read_text(
+        encoding="utf-8"
+    )
+    # Two encodes per audit (isometric + topdown).
+    encodings = iter(["Zmlyc3Q=", "Zmlyc3Q=", "c2Vjb25k", "c2Vjb25k"])
+
+    monkeypatch.setattr(
+        tools_mod,
+        "_encode_audit_jpeg",
+        lambda path: next(encodings),
+    )
+
+    class _AuditStubDriver(_RepairStubDriver):
+        def __init__(self, run_dir: Path) -> None:
+            super().__init__()
+            self._run_dir = run_dir
+
+        def connected_clear_ground_fraction(self) -> float:
+            return 0.95
+
+        def render(self, view: str) -> ArtifactRef:
+            rel = f"renders/{view}.png"
+            abs_path = self._run_dir / rel
+            abs_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (8, 8), (40, 50, 60)).save(abs_path, format="PNG")
+            data = abs_path.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            return ArtifactRef(
+                path=rel,
+                media_type="image/png",
+                byte_count=len(data),
+                blake2b256=digest,
+                sha256=digest,
+                producer="stub",
+                toolchain_version="test",
+            )
+
+    provider = _SpyProvider(
+        [
+            ProviderTurn(code=demo_source),
+            ProviderTurn(tool="compile_environment", args={}),
+            ProviderTurn(tool="audit_render", args={}),
+            ProviderTurn(tool="audit_render", args={}),
+            ProviderTurn(tool="simulate_navigation", args={}),
+        ],
+        descriptor=_descriptor(),
+    )
+    outcome = run_authoring(
+        _PROMPT,
+        provider=provider,  # type: ignore[arg-type]
+        seed=7,
+        max_turns=8,
+        wall_seconds=60.0,
+        run_dir=tmp_path,
+        driver_factory=lambda run_dir: _AuditStubDriver(run_dir),
+        limits=_LIMITS,
+    )
+    assert outcome.terminal_state == "accepted"
+
+    # Provider turn after the second audit must see ≤1 image-bearing message.
+    post_second_audit = provider.seen[4]
+    assert _image_message_count(post_second_audit) <= 1
+    content_arrays = [
+        message
+        for message in post_second_audit
+        if isinstance(message.get("content"), list)
+    ]
+    assert len(content_arrays) == 1
+    urls = [
+        str(part["image_url"]["url"])
+        for part in content_arrays[0]["content"]
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    ]
+    assert urls
+    assert all("c2Vjb25k" in url for url in urls)
+    assert not any("Zmlyc3Q=" in url for url in urls)
+
+
+def test_patch_thrashing_gets_full_program_nudge(tmp_path: Path) -> None:
+    import json
+
+    from envmaker.agent.providers import ProviderTurn, ScriptedProvider
+    from envmaker.core.program import ProviderInfo
+
+    demo_source = (_REPO_ROOT / "examples/demo/environment.py").read_text()
+    provider = ScriptedProvider(
+        [
+            ProviderTurn(code=demo_source),
+            ProviderTurn(tool="patch_program", args={"patch": "not a patch"}),
+            ProviderTurn(tool="patch_program", args={"patch": "still wrong"}),
+        ],
+        descriptor=ProviderInfo(
+            provider="scripted", model_name="fixture", prompt_version="1"
+        ),
+    )
+    outcome = run_authoring(
+        "thrash probe",
+        provider=provider,
+        seed=1,
+        max_turns=3,
+        wall_seconds=60.0,
+        run_dir=tmp_path,
+        driver_factory=lambda run_dir: (_ for _ in ()).throw(
+            AssertionError("driver must not start")
+        ),
+        limits=_LIMITS,
+    )
+    assert outcome.terminal_state in {"rejected_after_budget", "provider_error"}
+    nudges = [
+        json.loads(line)["payload"].get("reason")
+        for line in open(tmp_path / "runlog.jsonl")
+        if json.loads(line)["kind"] == "nudge"
+    ]
+    assert "patch thrashing" in nudges

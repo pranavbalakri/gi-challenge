@@ -31,6 +31,10 @@ _PYTHON_FENCE = _re.compile(
     r"```(?:python)?\s*\n(.*?)```",
     _re.DOTALL | _re.IGNORECASE,
 )
+_TOOL_CALL_MIMICRY = _re.compile(
+    r"^\s*TOOL_CALL\s+([a-z_]+)\s*(\{.*\})?\s*$",
+    _re.DOTALL,
+)
 _REPO_ROOT = _Path(__file__).resolve().parents[3]
 
 _TOOL_SCHEMAS: dict[str, dict[str, object]] = {
@@ -83,7 +87,7 @@ _TOOL_SCHEMAS: dict[str, dict[str, object]] = {
                     "type": "string",
                     "description": (
                         "component <id> | bounds | blockers | spawn | "
-                        "route x1 z1 x2 z2"
+                        "aesthetics | route x1 z1 x2 z2"
                     ),
                 }
             },
@@ -103,6 +107,18 @@ _TOOL_SCHEMAS: dict[str, dict[str, object]] = {
                 }
             },
             "required": ["view"],
+            "additionalProperties": False,
+        },
+    },
+    "audit_render": {
+        "name": "audit_render",
+        "description": (
+            "Capture isometric+topdown screenshots with bounded JPEG feedback "
+            "and aesthetics measurements."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
             "additionalProperties": False,
         },
     },
@@ -211,6 +227,23 @@ def _parse_assistant_message(message: dict[str, object]) -> ProviderTurn:
     fenced = _strip_python_fence(text)
     if fenced is not None:
         return ProviderTurn(code=fenced)
+    if "def build_environment" in text and "environment = build_environment()" in text:
+        # Bare-code recovery: weak models sometimes drop the fence around an
+        # otherwise complete program; losing it to a text turn wastes budget.
+        return ProviderTurn(code=text)
+    mimicry = _TOOL_CALL_MIMICRY.match(text)
+    if mimicry is not None and mimicry.group(1) in _TOOL_SCHEMAS:
+        # Weak models imitate the rendered transcript ("TOOL_CALL x {}") as
+        # plain text instead of emitting native tool calls; the intent is
+        # unambiguous, so execute it rather than burning a turn on a nudge.
+        raw_args = mimicry.group(2) or "{}"
+        try:
+            parsed_args = _json.loads(raw_args)
+        except _json.JSONDecodeError:
+            parsed_args = {}
+        if not isinstance(parsed_args, dict):
+            parsed_args = {}
+        return ProviderTurn(tool=mimicry.group(1), args=parsed_args)
     return ProviderTurn(text=text)
 
 

@@ -759,7 +759,13 @@ def _fixed_no_visual_candidate():
 
 
 def test_primitive_visual_shapes_validate() -> None:
-    from envmaker.core.scene_spec import BoxVisual, CylinderVisual, PlaneVisual
+    from envmaker.core.scene_spec import (
+        BoxVisual,
+        CylinderVisual,
+        PlaneVisual,
+        RibbonVisual,
+        SphereVisual,
+    )
 
     box = BoxVisual(size=(1.0, 2.0, 3.0))
     assert box.shape == "box"
@@ -767,9 +773,20 @@ def test_primitive_visual_shapes_validate() -> None:
 
     cylinder = CylinderVisual(radius=0.5, height=2.0, material="stone")
     assert cylinder.shape == "cylinder"
+    assert cylinder.top_radius is None
 
     plane = PlaneVisual(size_x=40.0, size_z=40.0)
     assert plane.shape == "plane"
+
+    sphere = SphereVisual(radius=1.5)
+    assert sphere.shape == "sphere"
+    assert sphere.material == "default"
+
+    ribbon = RibbonVisual(points=((0.0, 0.0), (1.0, 0.0)), width=0.25)
+    assert ribbon.shape == "ribbon"
+
+    cone = CylinderVisual(radius=1.0, height=2.0, top_radius=0.0)
+    assert cone.top_radius == 0.0
 
     with pytest.raises(ValidationError):
         BoxVisual(size=(0.0, 1.0, 1.0))
@@ -778,13 +795,31 @@ def test_primitive_visual_shapes_validate() -> None:
     with pytest.raises(ValidationError):
         CylinderVisual(radius=-1.0, height=2.0)
     with pytest.raises(ValidationError):
+        CylinderVisual(radius=1.0, height=2.0, top_radius=-0.1)
+    with pytest.raises(ValidationError):
         PlaneVisual(size_x=40.0, size_z=0.0)
+    with pytest.raises(ValidationError):
+        SphereVisual(radius=0.0)
+    with pytest.raises(ValidationError):
+        SphereVisual(radius=float("nan"))
+    with pytest.raises(ValidationError):
+        RibbonVisual(points=((0.0, 0.0),), width=0.25)
+    with pytest.raises(ValidationError):
+        RibbonVisual(points=((0.0, 0.0), (float("inf"), 1.0)), width=0.25)
+    with pytest.raises(ValidationError):
+        RibbonVisual(points=((0.0, 0.0), (1.0, 0.0)), width=0.0)
     with pytest.raises(ValidationError):
         BoxVisual(size=(1.0, 1.0, 1.0), rogue=True)
 
 
 def test_scene_node_visual_discriminated_union() -> None:
-    from envmaker.core.scene_spec import BoxVisual, PlaneVisual, SceneNode
+    from envmaker.core.scene_spec import (
+        BoxVisual,
+        PlaneVisual,
+        RibbonVisual,
+        SceneNode,
+        SphereVisual,
+    )
 
     node = SceneNode(
         node_id="crate",
@@ -802,12 +837,38 @@ def test_scene_node_visual_discriminated_union() -> None:
     )
     assert isinstance(ground.visual, PlaneVisual)
 
+    sphere = SceneNode.model_validate(
+        {
+            "node_id": "orb",
+            "semantic_id": "orb",
+            "transform": _identity_transform().model_dump(),
+            "visual": {"shape": "sphere", "radius": 1.0},
+        }
+    )
+    assert isinstance(sphere.visual, SphereVisual)
+    assert sphere.visual.radius == 1.0
+
+    ribbon = SceneNode.model_validate(
+        {
+            "node_id": "path",
+            "semantic_id": "path",
+            "transform": _identity_transform().model_dump(),
+            "visual": {
+                "shape": "ribbon",
+                "points": [[0.0, 0.0], [1.0, 1.0]],
+                "width": 0.5,
+            },
+        }
+    )
+    assert isinstance(ribbon.visual, RibbonVisual)
+    assert ribbon.visual.points == ((0.0, 0.0), (1.0, 1.0))
+
     with pytest.raises(ValidationError):
         SceneNode(
             node_id="bad",
             semantic_id="bad",
             transform=_identity_transform(),
-            visual={"shape": "sphere", "radius": 1.0},
+            visual={"shape": "pyramid", "radius": 1.0},
         )
 
     plain = SceneNode(
@@ -816,6 +877,72 @@ def test_scene_node_visual_discriminated_union() -> None:
         transform=_identity_transform(),
     )
     assert plain.visual is None
+
+
+def test_cylinder_top_radius_fingerprint_stable() -> None:
+    from envmaker.core.artifacts import (
+        ArtifactManifest,
+        _canonical_structure,
+        canonical_fingerprint,
+    )
+    from envmaker.core.scene_spec import (
+        BoxVisual,
+        CameraSpec,
+        CandidateScene,
+        CylinderVisual,
+        GodotSceneSpec,
+        PlaneVisual,
+        SceneNode,
+    )
+
+    cylinder = CylinderVisual(radius=1.0, height=2.0)
+    structure = _canonical_structure(cylinder)
+    assert "top_radius" not in structure
+    assert structure == {
+        "shape": "cylinder",
+        "radius": 1.0,
+        "height": 2.0,
+        "material": "default",
+    }
+
+    with_top = CylinderVisual(radius=1.0, height=2.0, top_radius=0.0)
+    assert "top_radius" in _canonical_structure(with_top)
+    assert canonical_fingerprint(cylinder) != canonical_fingerprint(with_top)
+
+    scene = GodotSceneSpec(
+        nodes=(
+            SceneNode(
+                node_id="ground",
+                semantic_id="ground",
+                transform=_identity_transform(),
+                visual=PlaneVisual(size_x=40.0, size_z=40.0, material="grass"),
+            ),
+            SceneNode(
+                node_id="crate",
+                semantic_id="crate",
+                transform=_identity_transform(),
+                visual=BoxVisual(size=(1.0, 1.0, 1.0), material="wood"),
+            ),
+            SceneNode(
+                node_id="marker",
+                semantic_id="marker",
+                transform=_identity_transform(),
+                visual=CylinderVisual(radius=0.3, height=1.5),
+            ),
+        ),
+        camera=CameraSpec(follow_semantic_id="ground", orthographic_size=14.0),
+        controller_semantic_id="ground",
+    )
+    candidate = CandidateScene(
+        scene=scene,
+        manifest=ArtifactManifest(root="artifacts", entries=()),
+    )
+    scene_structure = _canonical_structure(scene)
+    marker_visual = scene_structure["nodes"][2]["visual"]
+    assert "top_radius" not in marker_visual
+    assert candidate.candidate_fingerprint == canonical_fingerprint(
+        {"scene": scene, "manifest": ArtifactManifest(root="artifacts", entries=())}
+    )
 
 
 def test_candidate_fingerprint_pinned_no_visual() -> None:

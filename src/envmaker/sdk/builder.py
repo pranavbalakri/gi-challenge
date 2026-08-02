@@ -96,22 +96,80 @@ def _point_in_wall_rect(
     return 0.0 <= along <= length and abs(across) <= thickness / 2.0
 
 
-def _spawn_hits_blocker(
+def _prop_keepout_radius(kit: object, scale: float) -> float:
+    """Conservative horizontal keep-out radius for a blocking prop placement."""
+
+    reach = 0.0
+    for part in kit.parts:  # type: ignore[attr-defined]
+        if part.shape == "box":
+            assert part.size is not None
+            half_x = part.size[0] / 2.0
+            half_z = part.size[2] / 2.0
+        else:
+            assert part.radius is not None
+            half_x = half_z = float(part.radius)
+        part_reach = max(
+            abs(float(part.offset[0])) + half_x,
+            abs(float(part.offset[2])) + half_z,
+        )
+        reach = max(reach, part_reach)
+    return float(scale) * reach
+
+
+def _normalize_yaw_degrees(yaw: float) -> float:
+    normalized = _math.fmod(yaw, 360.0)
+    if normalized < 0.0:
+        normalized += 360.0
+    return normalized
+
+
+def _require_scale(scale: float, label: str = "scale") -> float:
+    scale = _require_finite(scale, label)
+    if scale < 0.5 or scale > 2.0:
+        raise ValueError(f"{label} must be between 0.5 and 2.0")
+    return scale
+
+
+def _require_scale_range(
+    scale_range: tuple[float, float],
+) -> tuple[float, float]:
+    if not isinstance(scale_range, tuple) or len(scale_range) != 2:
+        raise ValueError("scale_range must be a (lo, hi) pair")
+    lo = _require_finite(scale_range[0], "scale_range[0]")
+    hi = _require_finite(scale_range[1], "scale_range[1]")
+    if not (0.5 <= lo <= hi <= 2.0):
+        raise ValueError("scale_range must satisfy 0.5 <= lo <= hi <= 2.0")
+    return (lo, hi)
+
+
+def _spawn_blocker_hit(
     spawn: _Point,
     components: _Sequence[_SemanticComponent],
-) -> bool:
+) -> str | None:
+    """Return a located description of the blocker the spawn intersects.
+
+    Freeze failures happen before any candidate exists, so this message is
+    the model's ONLY signal for the repair; it must name the offender and
+    its extent, not just the fact of the collision.
+    """
+
     spawn_x, spawn_z = spawn
     for component in components:
         discriminator = component.payload.get("component")
         if discriminator in {"water", "obstacle", "structure"}:
-            footprint = _Polygon2D(
-                [
-                    (float(x), float(z))
-                    for x, z in component.payload["footprint"]  # type: ignore[index]
-                ]
-            )
+            points = [
+                (float(x), float(z))
+                for x, z in component.payload["footprint"]  # type: ignore[index]
+            ]
+            footprint = _Polygon2D(points)
             if _polygon_contains(footprint, spawn_x, spawn_z):
-                return True
+                xs = [p[0] for p in points]
+                zs = [p[1] for p in points]
+                return (
+                    f"'{component.semantic_id}' ({discriminator}, "
+                    f"x {min(xs):.1f}..{max(xs):.1f}, "
+                    f"z {min(zs):.1f}..{max(zs):.1f})"
+                )
         elif discriminator == "wall":
             start = (
                 float(component.payload["start"][0]),  # type: ignore[index]
@@ -123,8 +181,29 @@ def _spawn_hits_blocker(
             )
             thickness = float(component.payload["thickness"])  # type: ignore[arg-type]
             if _point_in_wall_rect(spawn_x, spawn_z, start, end, thickness):
-                return True
-    return False
+                return (
+                    f"'{component.semantic_id}' (wall from "
+                    f"({start[0]:.1f}, {start[1]:.1f}) to "
+                    f"({end[0]:.1f}, {end[1]:.1f}), "
+                    f"thickness {thickness:.1f})"
+                )
+        elif discriminator == "prop":
+            kit_name = str(component.payload["kit"])
+            kit_obj = _get_kit(kit_name)
+            if not kit_obj.blocking:
+                continue
+            center = (
+                float(component.payload["position"][0]),  # type: ignore[index]
+                float(component.payload["position"][1]),  # type: ignore[index]
+            )
+            scale = float(component.payload["scale"])  # type: ignore[arg-type]
+            radius = _prop_keepout_radius(kit_obj, scale)
+            if _math.hypot(spawn_x - center[0], spawn_z - center[1]) <= radius:
+                return (
+                    f"'{component.semantic_id}' (prop, center "
+                    f"({center[0]:.1f}, {center[1]:.1f}), radius {radius:.1f})"
+                )
+    return None
 
 
 class EnvironmentBuilder:
@@ -395,6 +474,45 @@ class EnvironmentBuilder:
             },
         )
 
+    def prop(
+        self,
+        name: str,
+        *,
+        kit: str,
+        position: _Point,
+        yaw: float = 0.0,
+        scale: float = 1.0,
+    ) -> EnvironmentBuilder:
+        """Declare a direct landmark/vegetation kit placement with pose control."""
+
+        self._ensure_mutable()
+        position_point = _require_point(position, "position")
+        yaw = _normalize_yaw_degrees(_require_finite(yaw, "yaw"))
+        scale = _require_scale(scale)
+        kit_obj = _get_kit(kit)
+        if kit_obj.category == "structure":
+            raise ValueError(
+                f"kit category must be landmark or vegetation (got structure); "
+                f"use structure() for structure kits that need footprints"
+            )
+        if kit_obj.category not in {"landmark", "vegetation"}:
+            raise ValueError(
+                f"kit category must be landmark or vegetation: {kit}"
+            )
+        semantic_id = self._claim_name(name)
+        kind = _ComponentKind.PROP if kit_obj.blocking else _ComponentKind.PRESENTATION
+        return self._append(
+            semantic_id,
+            kind,
+            {
+                "component": "prop",
+                "kit": kit,
+                "position": [position_point[0], position_point[1]],
+                "yaw_degrees": yaw,
+                "scale": scale,
+            },
+        )
+
     def scatter(
         self,
         name: str,
@@ -403,11 +521,14 @@ class EnvironmentBuilder:
         kit: str,
         count: int,
         min_spacing: float,
+        yaw_jitter: bool = False,
+        scale_range: tuple[float, float] | None = None,
     ) -> EnvironmentBuilder:
         """Declare a seeded vegetation scatter over the ground footprint.
 
         ``region`` must name the already-declared ground component. Scatter
         still samples over that ground footprint; declare ground before scatter.
+        Optional ``yaw_jitter`` / ``scale_range`` are model-controlled only.
         """
 
         self._ensure_mutable()
@@ -423,20 +544,30 @@ class EnvironmentBuilder:
         min_spacing = _require_finite(min_spacing, "min_spacing")
         if min_spacing <= 0.0:
             raise ValueError("min_spacing must be positive")
+        if not isinstance(yaw_jitter, bool):
+            raise ValueError("yaw_jitter must be a bool")
+        validated_range: tuple[float, float] | None = None
+        if scale_range is not None:
+            validated_range = _require_scale_range(scale_range)
         kit_obj = _get_kit(kit)
         if kit_obj.category != "vegetation":
             raise ValueError(f"kit category must be vegetation: {kit}")
         semantic_id = self._claim_name(name)
+        payload: dict[str, object] = {
+            "component": "scatter",
+            "region": region,
+            "kit": kit,
+            "count": count,
+            "min_spacing": min_spacing,
+        }
+        if yaw_jitter:
+            payload["yaw_jitter"] = True
+        if validated_range is not None:
+            payload["scale_range"] = [validated_range[0], validated_range[1]]
         return self._append(
             semantic_id,
             _ComponentKind.PROP,
-            {
-                "component": "scatter",
-                "region": region,
-                "kit": kit,
-                "count": count,
-                "min_spacing": min_spacing,
-            },
+            payload,
         )
 
     def spawn(self, name: str, *, position: _Point) -> EnvironmentBuilder:
@@ -503,10 +634,24 @@ class EnvironmentBuilder:
             if not _polygon_contains(
                 self._ground_footprint, spawn_x + dx, spawn_z + dz
             ):
-                raise ValueError("spawn must lie on the ground footprint")
+                ground_xs = [p[0] for p in self._ground_footprint.points]
+                ground_zs = [p[1] for p in self._ground_footprint.points]
+                raise ValueError(
+                    "spawn must lie on the ground footprint with "
+                    f"{_SPAWN_MARGIN} m clearance: "
+                    f"spawn=({spawn_x:.1f}, {spawn_z:.1f}), ground x "
+                    f"{min(ground_xs):.1f}..{max(ground_xs):.1f}, z "
+                    f"{min(ground_zs):.1f}..{max(ground_zs):.1f}"
+                )
 
-        if _spawn_hits_blocker(self._spawn_position, self._components):
-            raise ValueError("spawn intersects a blocker")
+        blocker_hit = _spawn_blocker_hit(self._spawn_position, self._components)
+        if blocker_hit is not None:
+            raise ValueError(
+                "spawn intersects a blocker: "
+                f"spawn=({spawn_x:.1f}, {spawn_z:.1f}) is inside "
+                f"{blocker_hit}; move the spawn at least "
+                f"{_SPAWN_MARGIN} m clear of it"
+            )
 
         model = _EnvironmentModel(
             name=self._name,

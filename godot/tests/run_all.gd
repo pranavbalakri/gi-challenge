@@ -39,6 +39,9 @@ func _run_all() -> void:
 	_test_decoder_length_surface()
 	_test_artifact_loader()
 	_test_materializer()
+	_test_organic_visuals()
+	_test_sky_and_backdrop()
+	_test_organic_kits()
 	_test_spine_json()
 	await _test_navigation_runtime()
 	await _test_camera_rig()
@@ -481,7 +484,7 @@ func _test_materializer() -> void:
 	check(
 		result.get("ok", false)
 		and root != null
-		and root.get_child_count() == 6
+		and root.get_child_count() == 16
 		and root.get_node_or_null("sun") is DirectionalLight3D
 		and root.get_node_or_null("environment") is WorldEnvironment
 		and root.get_node_or_null("apron") is MeshInstance3D,
@@ -548,7 +551,7 @@ func _test_materializer() -> void:
 
 	var apron_node: MeshInstance3D = root.get_node("apron")
 	check(
-		(apron_node.mesh as PlaneMesh).size == Vector2(160.0, 160.0)
+		(apron_node.mesh as PlaneMesh).size == Vector2(240.0, 240.0)
 		and apron_node.position.y < 0.0
 		and apron_node.get_node_or_null("collision") == null
 		and not apron_node.is_in_group(Materializer.NAVMESH_GROUP),
@@ -586,17 +589,358 @@ func _test_materializer() -> void:
 	var bad_candidate := _materializer_candidate()
 	var bad_nodes: Array = bad_candidate["scene"]["nodes"]
 	var bad_node: Dictionary = (bad_nodes[2] as Dictionary).duplicate(true)
-	bad_node["visual"] = {"shape": "sphere", "radius": 1.0}
+	bad_node["visual"] = {"shape": "pyramid", "radius": 1.0}
 	bad_nodes[2] = bad_node
 	var bad_result: Dictionary = Materializer.materialize(bad_candidate, get_root())
 	check(
 		not bad_result.get("ok", true)
-		and str(bad_result.get("error", "")) == "unknown visual shape: sphere",
+		and str(bad_result.get("error", "")) == "unknown visual shape: pyramid",
 		"materializer rejects unknown visual shape",
 	)
 
 	root.get_parent().remove_child(root)
 	root.free()
+
+
+func _test_organic_visuals() -> void:
+	var candidate := {
+		"scene": {
+			"nodes": [
+				_scene_node_dict(
+					"sphere_node",
+					Vector3(0.0, 1.0, 0.0),
+					null,
+					false,
+					{"shape": "sphere", "radius": 1.25, "material": "stone"},
+				),
+				_scene_node_dict(
+					"cone_node",
+					Vector3(2.0, 0.0, 0.0),
+					null,
+					false,
+					{
+						"shape": "cylinder",
+						"radius": 0.5,
+						"height": 2.0,
+						"top_radius": 0.0,
+						"material": "wood",
+					},
+				),
+				_scene_node_dict(
+					"ribbon_node",
+					Vector3(0.0, 0.0, 0.0),
+					null,
+					false,
+					{
+						"shape": "ribbon",
+						"points": [[0.0, 0.0], [1.0, 0.0], [2.0, 1.0]],
+						"width": 0.4,
+						"material": "dirt",
+					},
+				),
+			],
+			"camera": {
+				"follow_semantic_id": "sphere_node",
+				"orthographic_size": 14.0,
+				"fade_occluders": true,
+			},
+			"controller_semantic_id": "sphere_node",
+		},
+		"manifest": {"root": "artifacts", "entries": []},
+	}
+	var result: Dictionary = Materializer.materialize(candidate, get_root())
+	var root: Node3D = null
+	if result.get("ok", false):
+		root = result["root"]
+	check(result.get("ok", false) and root != null, "organic visuals materialize")
+	if root == null:
+		return
+
+	var sphere_node: Node3D = root.get_node_or_null("sphere_node")
+	var cone_node: Node3D = root.get_node_or_null("cone_node")
+	var ribbon_node: Node3D = root.get_node_or_null("ribbon_node")
+	var sphere_mesh: Variant = null
+	var cone_mesh: Variant = null
+	var ribbon_visual: MeshInstance3D = null
+	if sphere_node != null and sphere_node.get_node_or_null("visual") != null:
+		sphere_mesh = sphere_node.get_node("visual").mesh
+	if cone_node != null and cone_node.get_node_or_null("visual") != null:
+		cone_mesh = cone_node.get_node("visual").mesh
+	if ribbon_node != null and ribbon_node.get_node_or_null("visual") != null:
+		ribbon_visual = ribbon_node.get_node("visual")
+
+	check(
+		sphere_mesh is SphereMesh
+		and absf((sphere_mesh as SphereMesh).radius - 1.25) < 0.0001,
+		"organic sphere mesh radius exact",
+	)
+	check(
+		cone_mesh is CylinderMesh
+		and absf((cone_mesh as CylinderMesh).top_radius - 0.0) < 0.0001
+		and absf((cone_mesh as CylinderMesh).bottom_radius - 0.5) < 0.0001,
+		"organic cone mesh top_radius zero",
+	)
+	check(
+		ribbon_visual != null
+		and ribbon_visual.mesh is ArrayMesh
+		and (ribbon_visual.mesh as ArrayMesh).surface_get_array_len(0) > 24,
+		"organic ribbon array mesh has enough vertices",
+	)
+	check(
+		ribbon_node != null
+		and not (ribbon_node is StaticBody3D)
+		and ribbon_node.get_node_or_null("collision") == null,
+		"organic ribbon has no collider",
+	)
+	check(
+		ribbon_visual != null and absf(ribbon_visual.scale.y - 1.0) < 0.0001,
+		"organic ribbon skips y-compression",
+	)
+
+	var ribbon_front_up := false
+	if ribbon_visual != null and ribbon_visual.mesh is ArrayMesh:
+		var arrays: Array = (
+			ribbon_visual.mesh as ArrayMesh
+		).surface_get_arrays(0)
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		if idx.size() >= 3:
+			var a: Vector3 = verts[idx[0]]
+			var b: Vector3 = verts[idx[1]]
+			var c: Vector3 = verts[idx[2]]
+			# Godot front faces wind clockwise: from +Y the geometric
+			# normal of a front-facing upward triangle points DOWN.
+			ribbon_front_up = (b - a).cross(c - a).y < 0.0
+	check(
+		ribbon_front_up,
+		"organic ribbon winds front-face up (visible from above)",
+	)
+
+	root.get_parent().remove_child(root)
+	root.free()
+
+
+func _test_sky_and_backdrop() -> void:
+	var grass_result: Dictionary = Materializer.materialize(
+		_materializer_candidate(),
+		get_root(),
+	)
+	var grass_root: Node3D = null
+	if grass_result.get("ok", false):
+		grass_root = grass_result["root"]
+	check(grass_result.get("ok", false) and grass_root != null, "sky grass candidate ok")
+	if grass_root == null:
+		return
+
+	var world_env: WorldEnvironment = grass_root.get_node_or_null("environment")
+	var env_res: Environment = null
+	if world_env != null:
+		env_res = world_env.environment
+	var sky_mat: ProceduralSkyMaterial = null
+	if (
+		env_res != null
+		and env_res.sky != null
+		and env_res.sky.sky_material is ProceduralSkyMaterial
+	):
+		sky_mat = env_res.sky.sky_material
+	check(
+		env_res != null
+		and env_res.background_mode == Environment.BG_SKY
+		and sky_mat != null,
+		"environment uses BG_SKY with ProceduralSkyMaterial",
+	)
+
+	var mound_count := 0
+	var mounds_ok := true
+	for child: Node in grass_root.get_children():
+		if not str(child.name).begins_with("mound_"):
+			continue
+		mound_count += 1
+		if not (child is MeshInstance3D):
+			mounds_ok = false
+			continue
+		var mound: MeshInstance3D = child
+		if mound.get_node_or_null("collision") != null:
+			mounds_ok = false
+		if mound.is_in_group(Materializer.NAVMESH_GROUP):
+			mounds_ok = false
+	check(
+		mound_count == 10 and mounds_ok,
+		"exactly 10 visual-only mound_* backdrop spheres",
+	)
+
+	var grass_top: Color = Color.BLACK
+	if sky_mat != null:
+		grass_top = sky_mat.sky_top_color
+
+	grass_root.get_parent().remove_child(grass_root)
+	grass_root.free()
+
+	var snow_candidate := _materializer_candidate()
+	var snow_nodes: Array = snow_candidate["scene"]["nodes"]
+	var ground_node: Dictionary = (snow_nodes[0] as Dictionary).duplicate(true)
+	var ground_visual: Dictionary = (ground_node["visual"] as Dictionary).duplicate(true)
+	ground_visual["material"] = "snow"
+	ground_node["visual"] = ground_visual
+	snow_nodes[0] = ground_node
+	var snow_result: Dictionary = Materializer.materialize(snow_candidate, get_root())
+	var snow_root: Node3D = null
+	if snow_result.get("ok", false):
+		snow_root = snow_result["root"]
+	check(snow_result.get("ok", false) and snow_root != null, "sky snow candidate ok")
+	if snow_root == null:
+		return
+	var snow_env: WorldEnvironment = snow_root.get_node_or_null("environment")
+	var snow_top: Color = Color.BLACK
+	if (
+		snow_env != null
+		and snow_env.environment != null
+		and snow_env.environment.sky != null
+		and snow_env.environment.sky.sky_material is ProceduralSkyMaterial
+	):
+		snow_top = (
+			snow_env.environment.sky.sky_material as ProceduralSkyMaterial
+		).sky_top_color
+	check(
+		grass_top != snow_top,
+		"grass and snow ground palettes differ in sky top color",
+	)
+	snow_root.get_parent().remove_child(snow_root)
+	snow_root.free()
+
+
+func _test_organic_kits() -> void:
+	# Compiled pine kit shape: cylinder trunk + cone canopy (top_radius=0).
+	var pine_candidate := {
+		"scene": {
+			"nodes": [
+				_scene_node_dict(
+					"pine_trunk",
+					Vector3(0.0, 0.7, 0.0),
+					{
+						"shape": "cylinder",
+						"dimensions": {"radius": 0.18, "height": 1.4},
+					},
+					true,
+					{
+						"shape": "cylinder",
+						"radius": 0.18,
+						"height": 1.4,
+						"material": "wood",
+					},
+				),
+				_scene_node_dict(
+					"pine_canopy",
+					Vector3(0.0, 2.0, 0.0),
+					{
+						"shape": "cylinder",
+						"dimensions": {"radius": 0.9, "height": 1.8},
+					},
+					true,
+					{
+						"shape": "cylinder",
+						"radius": 0.9,
+						"height": 1.8,
+						"top_radius": 0.0,
+						"material": "grass",
+					},
+				),
+			],
+			"camera": {
+				"follow_semantic_id": "pine_trunk",
+				"orthographic_size": 14.0,
+				"fade_occluders": true,
+			},
+			"controller_semantic_id": "pine_trunk",
+		},
+		"manifest": {"root": "artifacts", "entries": []},
+	}
+	var pine_result: Dictionary = Materializer.materialize(pine_candidate, get_root())
+	var pine_root: Node3D = null
+	if pine_result.get("ok", false):
+		pine_root = pine_result["root"]
+	check(pine_result.get("ok", false) and pine_root != null, "pine kit materializes")
+	if pine_root != null:
+		var trunk: Node3D = pine_root.get_node_or_null("pine_trunk")
+		var canopy: Node3D = pine_root.get_node_or_null("pine_canopy")
+		var trunk_mesh: Variant = null
+		var canopy_mesh: Variant = null
+		if trunk != null and trunk.get_node_or_null("visual") != null:
+			trunk_mesh = trunk.get_node("visual").mesh
+		if canopy != null and canopy.get_node_or_null("visual") != null:
+			canopy_mesh = canopy.get_node("visual").mesh
+		check(
+			trunk_mesh is CylinderMesh
+			and canopy_mesh is CylinderMesh
+			and absf((canopy_mesh as CylinderMesh).top_radius - 0.0) < 0.0001,
+			"pine kit is trunk cylinder plus cone canopy",
+		)
+		pine_root.get_parent().remove_child(pine_root)
+		pine_root.free()
+
+	var boulder_candidate := {
+		"scene": {
+			"nodes": [
+				_scene_node_dict(
+					"boulder_large",
+					Vector3(0.0, 0.35, 0.0),
+					{
+						"shape": "cylinder",
+						"dimensions": {"radius": 0.9, "height": 1.8},
+					},
+					true,
+					{"shape": "sphere", "radius": 0.9, "material": "rock"},
+				),
+				_scene_node_dict(
+					"boulder_small",
+					Vector3(0.55, 0.25, 0.2),
+					{
+						"shape": "cylinder",
+						"dimensions": {"radius": 0.5, "height": 1.0},
+					},
+					true,
+					{"shape": "sphere", "radius": 0.5, "material": "rock"},
+				),
+			],
+			"camera": {
+				"follow_semantic_id": "boulder_large",
+				"orthographic_size": 14.0,
+				"fade_occluders": true,
+			},
+			"controller_semantic_id": "boulder_large",
+		},
+		"manifest": {"root": "artifacts", "entries": []},
+	}
+	var boulder_result: Dictionary = Materializer.materialize(
+		boulder_candidate,
+		get_root(),
+	)
+	var boulder_root: Node3D = null
+	if boulder_result.get("ok", false):
+		boulder_root = boulder_result["root"]
+	check(
+		boulder_result.get("ok", false) and boulder_root != null,
+		"boulder kit materializes",
+	)
+	if boulder_root == null:
+		return
+	var large: Node3D = boulder_root.get_node_or_null("boulder_large")
+	var small: Node3D = boulder_root.get_node_or_null("boulder_small")
+	var large_mesh: Variant = null
+	var small_mesh: Variant = null
+	if large != null and large.get_node_or_null("visual") != null:
+		large_mesh = large.get_node("visual").mesh
+	if small != null and small.get_node_or_null("visual") != null:
+		small_mesh = small.get_node("visual").mesh
+	check(
+		large_mesh is SphereMesh
+		and small_mesh is SphereMesh
+		and absf((large_mesh as SphereMesh).radius - 0.9) < 0.0001
+		and absf((small_mesh as SphereMesh).radius - 0.5) < 0.0001,
+		"boulder kit builds two rock spheres",
+	)
+	boulder_root.get_parent().remove_child(boulder_root)
+	boulder_root.free()
 
 
 func _materializer_candidate() -> Dictionary:
@@ -741,6 +1085,21 @@ func _test_navigation_runtime() -> void:
 		and float(episode["planned_path_length_m"]) >= 40.0
 		and float(episode["final_geodesic_distance_m"]) <= 2.0,
 		"agent traverses flat ground",
+	)
+
+	var wander_start: Vector3 = agent_body.global_position
+	agent_body.start_wander(4.0)
+	for i: int in range(40):
+		await physics_frame
+	agent_body.stop_wander()
+	var wander_position: Vector3 = agent_body.global_position
+	var closest: Vector3 = NavigationServer3D.map_get_closest_point(
+		nav.map_rid(), wander_position
+	)
+	check(
+		wander_position.distance_to(wander_start) > 0.5
+		and wander_position.distance_to(closest) < 1.5,
+		"wander moves the agent and stays on the navmesh",
 	)
 
 	get_root().remove_child(stage)
