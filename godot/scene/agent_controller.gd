@@ -6,6 +6,7 @@ const AGENT_COLOR := Color(0.85, 0.2, 0.55)
 
 var _agent: NavigationAgent3D = null
 var _map := RID()
+var _visual: Node3D = null
 
 
 func setup(map: RID) -> void:
@@ -17,16 +18,32 @@ func setup(map: RID) -> void:
 	capsule.height = 1.6
 	collision.shape = capsule
 	add_child(collision)
-	var visual := MeshInstance3D.new()
+	# Flat map-marker visual (disc + heading arrow) instead of a capsule:
+	# reads as a top-down token while the invisible capsule collider stays.
+	var visual := Node3D.new()
 	visual.name = "visual"
-	var capsule_mesh := CapsuleMesh.new()
-	capsule_mesh.radius = 0.4
-	capsule_mesh.height = 1.6
-	visual.mesh = capsule_mesh
 	var material := StandardMaterial3D.new()
 	material.albedo_color = AGENT_COLOR
-	visual.material_override = material
+	var disc := MeshInstance3D.new()
+	disc.name = "disc"
+	var disc_mesh := CylinderMesh.new()
+	disc_mesh.top_radius = 0.45
+	disc_mesh.bottom_radius = 0.45
+	disc_mesh.height = 0.22
+	disc.mesh = disc_mesh
+	disc.material_override = material
+	disc.position = Vector3(0.0, -0.55, 0.0)
+	visual.add_child(disc)
+	var arrow := MeshInstance3D.new()
+	arrow.name = "arrow"
+	var arrow_mesh := BoxMesh.new()
+	arrow_mesh.size = Vector3(0.22, 0.1, 0.5)
+	arrow.mesh = arrow_mesh
+	arrow.material_override = material
+	arrow.position = Vector3(0.0, -0.49, -0.55)
+	visual.add_child(arrow)
 	add_child(visual)
+	_visual = visual
 	_agent = NavigationAgent3D.new()
 	_agent.name = "agent"
 	_agent.path_desired_distance = 0.6
@@ -68,6 +85,9 @@ func run_episode(
 			new_velocity.y = maxf(new_velocity.y, 0.0)
 		velocity = new_velocity
 		move_and_slide()
+		var planar := Vector3(velocity.x, 0.0, velocity.z)
+		if _visual != null and planar.length() > 0.05:
+			_visual.rotation.y = atan2(-planar.x, -planar.z)
 		if is_on_wall():
 			collisions += 1
 		var moved := global_position.distance_to(last)

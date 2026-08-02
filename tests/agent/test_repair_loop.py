@@ -84,7 +84,7 @@ class _RepairStubDriver:
     def wait_navigation_ready(self, timeout: float = 30.0) -> None:
         return None
 
-    def connected_navigable_fraction(self) -> float:
+    def connected_clear_ground_fraction(self) -> float:
         return 0.44 if self.calls == 0 else 0.95
 
     def navigate(self, probe: NavigationProbe) -> EpisodeResult:
@@ -163,7 +163,7 @@ def _money_kind_sequence(events: list[dict]) -> list[object]:
                     (
                         "tool_call",
                         "simulate",
-                        "v6.navigation_fraction" in codes,
+                        "v6.clear_ground_fraction" in codes,
                         0.44,
                     )
                 )
@@ -175,7 +175,7 @@ def _money_kind_sequence(events: list[dict]) -> list[object]:
 
 
 def test_frozen_village_walkable_fraction_math() -> None:
-    """Pure-geometry check: blocked gate ≈0.44; open gate ≥0.9."""
+    """Pure-geometry check: blocked gate ≈0.46; open gate ≈1.0 (clear-ground denom)."""
 
     rev1 = (_FIXTURE / "rev1.py").read_text(encoding="utf-8")
     td = Path(tempfile.mkdtemp())
@@ -194,9 +194,11 @@ def test_frozen_village_walkable_fraction_math() -> None:
     assert surface.patch_program((_FIXTURE / "patch2.txt").read_text(encoding="utf-8")).ok
     open_source = ctx.source
 
-    # Area left of the bisecting wall (x < -2.25) over 40×40 ground.
-    left_fraction = (17.75 * 40.0) / 1600.0
-    assert 0.4 <= left_fraction <= 0.48
+    # Hand calc (40×40 ground, wall at x≈-2.25): left clear strip ≈17.75×40 /
+    # clear cells. With blocker footprints excluded from the denominator,
+    # blocked reachable/clear ≈ 670/1459 ≈ 0.459; open ≈ 1463/1463 = 1.0.
+    left_area_over_ground = (17.75 * 40.0) / 1600.0
+    assert 0.4 <= left_area_over_ground <= 0.48
 
     def _grid_fraction(source: str, *, grid: int = 40) -> float:
         static = validate_static(source, limits=_LIMITS)
@@ -207,6 +209,8 @@ def test_frozen_village_walkable_fraction_math() -> None:
         xs = [min_x + (i + 0.5) * (max_x - min_x) / grid for i in range(grid)]
         zs = [min_z + (j + 0.5) * (max_z - min_z) / grid for j in range(grid)]
         walkable = [[_point_clear(x, z, blockers) for z in zs] for x in xs]
+        clear_count = sum(1 for row in walkable for cell in row if cell)
+        assert clear_count > 0
         origin = (-16.0, -16.0)
         best = None
         best_dist = math.inf
@@ -236,7 +240,7 @@ def test_frozen_village_walkable_fraction_math() -> None:
                     continue
                 seen[ni][nj] = True
                 queue.append((ni, nj))
-        return reachable / float(grid * grid)
+        return reachable / float(clear_count)
 
     blocked = _grid_fraction(blocked_source)
     opened = _grid_fraction(open_source)
@@ -285,6 +289,8 @@ def test_keyless_two_repair_loop_accepts(tmp_path: Path, monkeypatch: pytest.Mon
     assert outcome.terminal_state == "accepted"
     assert outcome.turns_used == 8
     assert outcome.bundle_sealed is True
+    assert outcome.definition_path == "environment-definition.json"
+    assert outcome.definition_fingerprint is not None
 
     rev1 = (tmp_path / "revisions" / "rev-1.py").read_text(encoding="utf-8")
     rev2 = (tmp_path / "revisions" / "rev-2.py").read_text(encoding="utf-8")
@@ -294,7 +300,18 @@ def test_keyless_two_repair_loop_accepts(tmp_path: Path, monkeypatch: pytest.Mon
     assert "gate_ice" in rev2
     assert "gate_ice" not in rev3
 
+    import json
+
+    from envmaker.core.definition import EnvironmentDefinition, require_definition
     from envmaker.runlog import RunLog
+
+    definition_path = tmp_path / "environment-definition.json"
+    assert definition_path.is_file()
+    loaded = json.loads(definition_path.read_text(encoding="utf-8"))
+    definition = require_definition(
+        EnvironmentDefinition.model_validate(loaded["payload"])
+    )
+    assert definition.definition_fingerprint == outcome.definition_fingerprint
 
     events = RunLog(tmp_path / "runlog.jsonl").events()
     sequence = _money_kind_sequence(events)
@@ -327,7 +344,13 @@ def test_keyless_two_repair_loop_accepts(tmp_path: Path, monkeypatch: pytest.Mon
         if event["kind"] == "tool_call"
         and event["payload"].get("name") == "simulate_navigation"
     ]
-    assert "v6.navigation_fraction" in sim_events[0]["payload"]["signal_codes"]
+    assert "v6.clear_ground_fraction" in sim_events[0]["payload"]["signal_codes"]
+    outcome_events = [event for event in events if event["kind"] == "outcome"]
+    assert outcome_events[-1]["payload"]["definition_path"] == "environment-definition.json"
+    assert (
+        outcome_events[-1]["payload"]["definition_fingerprint"]
+        == outcome.definition_fingerprint
+    )
     assert driver.closed is True
 
 
@@ -346,6 +369,9 @@ def test_budget_exhaustion_rejected(tmp_path: Path) -> None:
     )
     assert outcome.terminal_state == "rejected_after_budget"
     assert outcome.turns_used == 3
+    assert outcome.definition_path is None
+    assert outcome.definition_fingerprint is None
+    assert not (tmp_path / "environment-definition.json").exists()
 
 
 def test_provider_error_on_exhausted_transcript(tmp_path: Path) -> None:
@@ -362,6 +388,148 @@ def test_provider_error_on_exhausted_transcript(tmp_path: Path) -> None:
     )
     assert outcome.terminal_state == "provider_error"
     assert outcome.turns_used == 0
+    assert outcome.definition_path is None
+    assert outcome.definition_fingerprint is None
+    assert not (tmp_path / "environment-definition.json").exists()
+
+
+def test_probe_targets_first_landmark_despite_earlier_scatter(
+    tmp_path: Path,
+) -> None:
+    from envmaker.agent.loop import _ensure_probe
+    from envmaker.agent.tools import ToolContext
+    from envmaker.runlog import RunLog
+    from envmaker.sdk import EnvironmentBuilder, Polygon2D
+    from envmaker.validation import validate_model
+
+    builder = EnvironmentBuilder("probe-order", seed=1, style="test")
+    builder.ground(
+        "field",
+        footprint=Polygon2D([(-20, -20), (20, -20), (20, 20), (-20, 20)]),
+        material="grass",
+    )
+    builder.path("lane", points=[(-10, 0), (10, 0)], width=1.2, material="dirt")
+    builder.water(
+        "pond",
+        footprint=Polygon2D([(8, -8), (12, -8), (12, -4), (8, -4)]),
+    )
+    builder.scatter("brush", region="field", kit="shrub", count=3, min_spacing=2.0)
+    builder.landmark("goal_obelisk", position=(10.0, 10.0), kit="obelisk")
+    builder.spawn("hero", position=(-12.0, -12.0))
+    builder.camera(orthographic_size=20.0)
+    model = builder.freeze()
+    static = validate_model(model)
+    assert static.candidate is not None
+    # Scatter kit parts are non-colliding dotted ids that precede the landmark
+    # in scene node order; the probe must still target the landmark's .0 part.
+    scatter_ids = [
+        node.semantic_id
+        for node in static.candidate.scene.nodes
+        if node.semantic_id.startswith("brush.")
+    ]
+    assert scatter_ids
+    ctx = ToolContext(
+        source="",
+        limits=_LIMITS,
+        run_dir=tmp_path,
+        runlog=RunLog(tmp_path / "r.jsonl"),
+        static=static,
+    )
+    _ensure_probe(ctx)
+    assert ctx.probe is not None
+    assert ctx.probe.target_landmark_id == "goal_obelisk.0"
+
+
+def test_simulate_no_landmark_returns_typed_v7_failure(tmp_path: Path) -> None:
+    from envmaker.agent.loop import _ensure_probe
+    from envmaker.agent.tools import ToolContext
+    from envmaker.runlog import RunLog
+    from envmaker.sdk import EnvironmentBuilder, Polygon2D
+    from envmaker.validation import validate_model
+
+    builder = EnvironmentBuilder("no-landmark", seed=2, style="test")
+    builder.ground(
+        "field",
+        footprint=Polygon2D([(-12, -12), (12, -12), (12, 12), (-12, 12)]),
+        material="grass",
+    )
+    builder.spawn("hero", position=(-6.0, -6.0))
+    builder.camera(orthographic_size=16.0)
+    model = builder.freeze()
+    static = validate_model(model)
+    assert static.candidate is not None
+    driver = _RepairStubDriver()
+    ctx = ToolContext(
+        source="pass\n",
+        limits=_LIMITS,
+        run_dir=tmp_path,
+        runlog=RunLog(tmp_path / "r.jsonl"),
+        driver=driver,
+        static=static,
+    )
+    _ensure_probe(ctx)
+    assert ctx.probe is None
+    result = ToolSurface(ctx).simulate_navigation()
+    assert result.ok is False
+    assert "harness_error" not in result.reason
+    codes = {signal.code for signal in result.signals}
+    assert "v7.no_landmark" in codes
+    guidance = next(
+        signal.guidance for signal in result.signals if signal.code == "v7.no_landmark"
+    )
+    assert "declare a landmark so navigation has a distinct goal" in guidance
+
+
+def test_persistence_failure_downgrades_to_harness_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = ScriptedProvider.from_fixture(_FIXTURE / "transcript.json")
+    driver = _RepairStubDriver()
+
+    def factory(run_dir: Path) -> _RepairStubDriver:
+        del run_dir
+        return driver
+
+    import envmaker.agent.tools as tools_mod
+    from pathlib import Path as PathCls
+
+    original_validate = tools_mod._validate_candidate
+    original_write = PathCls.write_text
+
+    def _counting_validate(model, candidate, drv, *, probe, min_walkable_fraction=0.5):
+        reports = original_validate(
+            model,
+            candidate,
+            drv,
+            probe=probe,
+            min_walkable_fraction=min_walkable_fraction,
+        )
+        driver.calls += 1
+        return reports
+
+    def _boom_write(self: Path, data: object, *args: object, **kwargs: object) -> int:
+        if self.name == "environment-definition.json":
+            raise OSError("disk full")
+        return original_write(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(tools_mod, "_validate_candidate", _counting_validate)
+    monkeypatch.setattr(PathCls, "write_text", _boom_write)
+
+    outcome = run_authoring(
+        _PROMPT,
+        provider=provider,
+        seed=7,
+        max_turns=8,
+        wall_seconds=120.0,
+        run_dir=tmp_path,
+        driver_factory=factory,
+        limits=_LIMITS,
+    )
+    assert outcome.terminal_state == "harness_error"
+    assert outcome.bundle_sealed is False
+    assert outcome.definition_path is None
+    assert outcome.definition_fingerprint is None
+    assert "failed to persist sealed definition" in (outcome.failure_summary or "")
 
 
 def test_harness_error_when_tool_surface_raises(
@@ -445,6 +613,9 @@ def test_live_two_repair_money_fixture(tmp_path: Path) -> None:
     assert outcome.terminal_state == "accepted"
     assert outcome.bundle_sealed is True
     assert outcome.turns_used == 8
+    assert outcome.definition_path == "environment-definition.json"
+    assert outcome.definition_fingerprint is not None
+    assert (tmp_path / "environment-definition.json").is_file()
 
     from envmaker.runlog import RunLog
 
@@ -539,3 +710,70 @@ def test_empty_source_tool_turn_appends_nudge(tmp_path: Path) -> None:
     ]
     assert patch_events, "patch tool_call should be logged"
     assert "no program exists yet" in str(patch_events[-1]["payload"])
+
+
+def test_trim_drops_tool_pairs_and_pins_prompts() -> None:
+    from envmaker.agent.loop import _MESSAGE_CAP, _trim_messages
+
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "TASK"},
+        {"role": "assistant", "content": "```python\ncode\n```"},
+    ]
+    for index in range(40):
+        messages.append(
+            {"role": "assistant", "content": f"TOOL_CALL compile {index}"}
+        )
+        messages.append(
+            {"role": "user", "content": f"TOOL_RESULT compile {index}"}
+        )
+    _trim_messages(messages)
+
+    assert len(messages) <= _MESSAGE_CAP
+    assert messages[0]["content"] == "SYS"
+    assert messages[1]["content"] == "TASK"
+    contents = [str(m.get("content")) for m in messages]
+    assert any(c.startswith("```python") for c in contents), "revision retained"
+    kept_results = [c for c in contents if c.startswith("TOOL_RESULT")]
+    kept_calls = [c for c in contents if c.startswith("TOOL_CALL")]
+    assert kept_results, "recent tool results must survive"
+    assert abs(len(kept_calls) - len(kept_results)) <= 1, "pairs drop together"
+    assert contents[-1] == "TOOL_RESULT compile 39", "newest result retained"
+
+
+def test_narration_text_turn_gets_action_nudge(tmp_path: Path) -> None:
+    import json
+
+    from envmaker.agent.providers import ProviderTurn, ScriptedProvider
+    from envmaker.core.program import ProviderInfo
+
+    demo_source = Path("examples/demo/environment.py").read_text()
+    provider = ScriptedProvider(
+        [
+            ProviderTurn(code=demo_source),
+            ProviderTurn(tool="compile_environment"),
+            ProviderTurn(text="Everything looks good; the village is ready."),
+        ],
+        descriptor=ProviderInfo(
+            provider="scripted", model_name="fixture", prompt_version="1"
+        ),
+    )
+    outcome = run_authoring(
+        "narration probe",
+        provider=provider,
+        seed=7,
+        max_turns=3,
+        wall_seconds=60.0,
+        run_dir=tmp_path,
+        driver_factory=lambda run_dir: (_ for _ in ()).throw(
+            AssertionError("driver must not start")
+        ),
+        limits=_LIMITS,
+    )
+    assert outcome.terminal_state == "rejected_after_budget"
+    nudges = [
+        json.loads(line)
+        for line in open(tmp_path / "runlog.jsonl")
+        if json.loads(line)["kind"] == "nudge"
+    ]
+    assert any(n["payload"].get("reason") == "narration" for n in nudges)

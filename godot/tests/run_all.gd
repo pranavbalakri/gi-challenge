@@ -481,9 +481,10 @@ func _test_materializer() -> void:
 	check(
 		result.get("ok", false)
 		and root != null
-		and root.get_child_count() == 5
+		and root.get_child_count() == 6
 		and root.get_node_or_null("sun") is DirectionalLight3D
-		and root.get_node_or_null("environment") is WorldEnvironment,
+		and root.get_node_or_null("environment") is WorldEnvironment
+		and root.get_node_or_null("apron") is MeshInstance3D,
 		"materializer builds root with lighting",
 	)
 	if root == null:
@@ -530,6 +531,28 @@ func _test_materializer() -> void:
 		and marker_mesh is CylinderMesh
 		and (marker_mesh as CylinderMesh).height == 1.5,
 		"materializer meshes match visuals",
+	)
+
+	var y_scale: float = Materializer.visual_y_scale()
+	var crate_visual: MeshInstance3D = crate.get_node("visual")
+	var crate_collider: BoxShape3D = crate.get_node("collision").shape
+	check(
+		absf(crate_visual.scale.y - y_scale) < 0.001
+		and absf(
+			crate_visual.position.y - (-(1.0 - y_scale) * 0.5)
+		) < 0.001
+		and crate_collider.size == Vector3(1.0, 1.0, 1.0)
+		and (ground.get_node("visual") as MeshInstance3D).scale.y == 1.0,
+		"visual y-compression leaves colliders and ground untouched",
+	)
+
+	var apron_node: MeshInstance3D = root.get_node("apron")
+	check(
+		(apron_node.mesh as PlaneMesh).size == Vector2(160.0, 160.0)
+		and apron_node.position.y < 0.0
+		and apron_node.get_node_or_null("collision") == null
+		and not apron_node.is_in_group(Materializer.NAVMESH_GROUP),
+		"apron is visual-only surrounding terrain",
 	)
 
 	var ground_material: Variant = null
@@ -747,7 +770,7 @@ func _test_camera_rig() -> void:
 		camera.projection == Camera3D.PROJECTION_ORTHOGONAL
 		and absf(camera.size - 14.0) < 0.001
 		and camera.rotation_degrees.distance_to(
-			Vector3(-35.264, 45.0, 0.0)
+			Vector3(-CameraRig.iso_pitch_degrees(), 45.0, 0.0)
 		) < 0.01
 		and camera.position.distance_to(expected_position) < 0.001,
 		"camera iso framing exact",
@@ -760,6 +783,30 @@ func _test_camera_rig() -> void:
 		and camera.projection == Camera3D.PROJECTION_ORTHOGONAL,
 		"camera topdown framing exact",
 	)
+
+	var mover := Node3D.new()
+	get_root().add_child(mover)
+	mover.global_position = Vector3(5.0, 0.0, 5.0)
+	rig.set_follow_target(mover)
+	rig.frame_isometric(mover.global_position)
+	mover.global_position = Vector3(9.0, 0.0, -2.0)
+	await process_frame
+	var follow_expected: Vector3 = (
+		mover.global_position + camera.transform.basis.z * 30.0
+	)
+	check(
+		camera.position.distance_to(follow_expected) < 0.01,
+		"camera follows moving target each frame",
+	)
+	rig.frame_topdown(mover.global_position)
+	var topdown_position: Vector3 = camera.position
+	mover.global_position = Vector3(1.0, 0.0, 1.0)
+	await process_frame
+	check(
+		camera.position.distance_to(topdown_position) < 0.001,
+		"topdown framing suspends follow",
+	)
+	mover.queue_free()
 
 	var result: Dictionary = await rig.capture(
 		_tmp_root.path_join("camera_probe.png")

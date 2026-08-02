@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from envmaker.godot_bridge.process import GodotProcess, ProcessError
+from envmaker.godot_bridge.process import (
+    GodotProcess,
+    ProcessError,
+    godot_user_data_dir,
+    resolve_godot_binary,
+)
 
 
 def _write_child(tmp_path: Path, body: str) -> Path:
@@ -196,7 +201,6 @@ sys.exit(3)
 
 from envmaker.core.contracts import MessageType
 from envmaker.godot_bridge.client import BridgeProtocolError, BridgeServer
-from envmaker.godot_bridge.process import resolve_godot_binary
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -286,7 +290,12 @@ from collections.abc import Callable
 
 
 def _godot_user_dir_writable(home: Path | None = None) -> bool:
-    base = (home or Path.home()) / "Library" / "Application Support" / "Godot"
+    base = godot_user_data_dir()
+    if home is not None:
+        try:
+            base = home / base.relative_to(Path.home())
+        except ValueError:
+            base = home / base.name
     probe_dir = base if base.is_dir() else base.parent
     try:
         probe_dir.mkdir(parents=True, exist_ok=True)
@@ -308,7 +317,11 @@ def _require_godot_user_dir(probe: Callable[[], bool] = _godot_user_dir_writable
 def test_godot_user_dir_probe_writable(tmp_path: Path) -> None:
     assert _godot_user_dir_writable(home=tmp_path) is True
 
-    godot_dir = tmp_path / "Library" / "Application Support" / "Godot"
+    real = godot_user_data_dir()
+    try:
+        godot_dir = tmp_path / real.relative_to(Path.home())
+    except ValueError:
+        godot_dir = tmp_path / real.name
     assert godot_dir.parent.is_dir()
     assert not godot_dir.exists()
 
@@ -320,7 +333,12 @@ def test_godot_user_dir_probe_writable(tmp_path: Path) -> None:
 def test_godot_user_dir_probe_unwritable(tmp_path: Path) -> None:
     if os.geteuid() == 0:
         pytest.skip("permission-bit probe requires a non-root user")
-    support_dir = tmp_path / "Library" / "Application Support"
+    real = godot_user_data_dir()
+    try:
+        godot_dir = tmp_path / real.relative_to(Path.home())
+    except ValueError:
+        godot_dir = tmp_path / real.name
+    support_dir = godot_dir.parent
     support_dir.mkdir(parents=True)
     support_dir.chmod(0o555)
     try:
@@ -420,9 +438,171 @@ def test_resolve_godot_binary_env_override(
     monkeypatch.setenv("GODOT_BIN", "/opt/godot/bin/godot4")
     assert resolve_godot_binary() == Path("/opt/godot/bin/godot4")
 
-    monkeypatch.delenv("GODOT_BIN")
+    monkeypatch.delenv("GODOT_BIN", raising=False)
     default = resolve_godot_binary()
-    assert default.as_posix().endswith(
-        "tools/godot/Godot.app/Contents/MacOS/Godot"
-    )
     assert default.is_absolute()
+    assert "tools/godot" in default.as_posix()
+
+
+def test_godot_user_data_dir_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "darwin")
+    assert godot_user_data_dir() == (
+        Path.home() / "Library" / "Application Support" / "Godot"
+    )
+
+
+def test_godot_user_data_dir_win32_with_appdata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "win32")
+    appdata = tmp_path / "Roaming"
+    monkeypatch.setenv("APPDATA", str(appdata))
+    assert godot_user_data_dir() == appdata / "Godot"
+
+
+def test_godot_user_data_dir_win32_without_appdata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "win32")
+    monkeypatch.delenv("APPDATA", raising=False)
+    assert godot_user_data_dir() == (
+        Path.home() / "AppData" / "Roaming" / "Godot"
+    )
+
+
+def test_godot_user_data_dir_linux_xdg(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "linux")
+    xdg = tmp_path / "xdg-data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+    assert godot_user_data_dir() == xdg / "godot"
+
+
+def test_godot_user_data_dir_linux_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "linux")
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    assert godot_user_data_dir() == Path.home() / ".local" / "share" / "godot"
+
+
+def test_resolve_godot_binary_godot_bin_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GODOT_BIN", str(tmp_path / "custom-godot"))
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "linux")
+    tools = tmp_path / "tools" / "godot"
+    tools.mkdir(parents=True)
+    (tools / "godot").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(
+        "envmaker.godot_bridge.process._TOOLS_GODOT", tools
+    )
+    assert resolve_godot_binary() == tmp_path / "custom-godot"
+
+
+def test_resolve_godot_binary_first_existing_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GODOT_BIN", raising=False)
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "linux")
+    tools = tmp_path / "tools" / "godot"
+    tools.mkdir(parents=True)
+    secondary = tools / "godot4"
+    secondary.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(
+        "envmaker.godot_bridge.process._TOOLS_GODOT", tools
+    )
+    assert resolve_godot_binary() == secondary
+
+
+def test_resolve_godot_binary_platform_primary_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GODOT_BIN", raising=False)
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "win32")
+    tools = tmp_path / "tools" / "godot"
+    tools.mkdir(parents=True)
+    monkeypatch.setattr(
+        "envmaker.godot_bridge.process._TOOLS_GODOT", tools
+    )
+    assert resolve_godot_binary() == tools / "godot.exe"
+
+
+def test_resolve_godot_binary_darwin_primary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GODOT_BIN", raising=False)
+    monkeypatch.setattr("envmaker.godot_bridge.process.sys.platform", "darwin")
+    tools = tmp_path / "tools" / "godot"
+    primary = tools / "Godot.app" / "Contents" / "MacOS" / "Godot"
+    primary.parent.mkdir(parents=True)
+    primary.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(
+        "envmaker.godot_bridge.process._TOOLS_GODOT", tools
+    )
+    assert resolve_godot_binary() == primary
+
+
+def test_sanitized_env_names_win32_includes_system_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from envmaker.godot_bridge import process as process_mod
+
+    monkeypatch.setattr(process_mod.sys, "platform", "win32")
+    names = process_mod._sanitized_env_names()
+    for key in ("SYSTEMROOT", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"):
+        assert key in names
+    monkeypatch.setattr(process_mod.sys, "platform", "darwin")
+    posix_names = process_mod._sanitized_env_names()
+    assert "SYSTEMROOT" not in posix_names
+    assert posix_names == ("PATH", "HOME", "USER", "TMPDIR")
+
+
+def test_worker_guards_without_resource_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Portability: worker containment without rlimits still completes."""
+    import envmaker.agent.worker as worker
+    from envmaker.agent.worker import run_generated_program
+    from envmaker.core.program import ResourceLimits, WorkerExitReason
+
+    monkeypatch.setattr(worker, "_resource", None)
+    limits = ResourceLimits(
+        cpu_seconds=5.0, memory_mb=256, output_bytes=65536, wall_seconds=10.0
+    )
+    assert worker._make_preexec(limits) is None
+
+    source = """\
+from envmaker.sdk import EnvironmentBuilder, Polygon2D
+
+def build_environment() -> object:
+    return (
+        EnvironmentBuilder("tiny", seed=1)
+        .ground(
+            "ground",
+            footprint=Polygon2D([(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]),
+            material="grass",
+        )
+        .spawn("hero", position=(0.0, 0.0))
+        .camera(orthographic_size=12.0)
+        .freeze()
+    )
+
+environment = build_environment()
+"""
+    execution, model, _stderr = run_generated_program(source, limits=limits)
+    assert execution.exit_reason is WorkerExitReason.COMPLETED
+    assert model is not None
+
+
+def test_worker_sigxcpu_absent_falls_through_to_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import envmaker.agent.worker as worker
+
+    monkeypatch.delattr(worker._signal, "SIGXCPU", raising=False)
+    # Negative returncodes that would be SIGXCPU on POSIX must not map to
+    # RESOURCE_LIMIT when the signal is unavailable.
+    assert worker._is_cpu_limit_returncode(-24) is False
+    assert worker._is_cpu_limit_returncode(-1) is False

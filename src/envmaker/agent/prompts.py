@@ -74,8 +74,8 @@ environment = build_environment()
 REPAIR GUIDANCE:
 - Read each signal's code, measurements, and guidance; patch minimally.
 - Prefer search/replace for single-line fixes; recompile before simulating.
-- Spawn-in-blocker fails at freeze (program stage); disconnected walkable area fails \
-navigation fraction (v6.navigation_fraction). Open corridors, then re-simulate.
+- Spawn-in-blocker fails at freeze (program stage); disconnected clear ground fails \
+clear-ground fraction (v6.clear_ground_fraction). Open corridors, then re-simulate.
 
 FIRST MOVE (mandatory): your first reply must be the COMPLETE program in one \
 ```python fenced block. There is no write tool: a fenced code reply is the ONLY \

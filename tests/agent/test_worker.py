@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from envmaker.core.artifacts import canonical_fingerprint
 from envmaker.core.model import EnvironmentModel
 from envmaker.core.program import ResourceLimits, WorkerExitReason
 from envmaker.sdk import SDK_VERSION, compile_environment_model
 from envmaker.agent.worker import run_generated_program
+import envmaker.agent.worker as worker_mod
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -238,6 +241,25 @@ def test_marker_shadow_line_does_not_mask_real_model() -> None:
     execution, model, _stderr = run_generated_program(source, limits=_limits())
     assert execution.exit_reason is WorkerExitReason.COMPLETED
     assert model is not None
+
+
+def test_worker_without_resource_module_still_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(worker_mod, "_resource", None)
+    assert worker_mod._make_preexec(_limits()) is None
+    execution, model, _stderr = run_generated_program(
+        _HAPPY_SOURCE, limits=_limits()
+    )
+    assert execution.exit_reason is WorkerExitReason.COMPLETED
+    assert model is not None
+
+
+def test_sigxcpu_absent_negative_returncode_not_resource_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(worker_mod._signal, "SIGXCPU", raising=False)
+    assert worker_mod._is_cpu_limit_returncode(-24) is False
 
 
 def test_runner_injects_src_dir_despite_isolated_mode() -> None:

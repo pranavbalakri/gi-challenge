@@ -65,7 +65,7 @@ class HardStage(_StrEnum):
     NAVIGATION = "navigation"
     CONTROLLER = "controller"
     CAMERA = "camera"
-    SEMANTIC = "semantic"
+    SEMANTIC = "semantic"  # component-graph validity; not prompt-faithfulness
 
 
 class SealError(ValueError):

@@ -13,7 +13,7 @@ from envmaker.agent.worker import run_generated_program
 from envmaker.core.contracts import ArtifactStore
 from envmaker.core.episode import NavigationProbe, TerminalReason
 from envmaker.core.program import ResourceLimits, WorkerExitReason
-from envmaker.godot_bridge.process import resolve_godot_binary
+from envmaker.godot_bridge.process import godot_user_data_dir, resolve_godot_binary
 from envmaker.sdk import compile_environment_model
 
 
@@ -23,7 +23,12 @@ _GODOT_BIN = resolve_godot_binary()
 
 
 def _godot_user_dir_writable(home: Path | None = None) -> bool:
-    base = (home or Path.home()) / "Library" / "Application Support" / "Godot"
+    base = godot_user_data_dir()
+    if home is not None:
+        try:
+            base = home / base.relative_to(Path.home())
+        except ValueError:
+            base = home / base.name
     probe_dir = base if base.is_dir() else base.parent
     try:
         probe_dir.mkdir(parents=True, exist_ok=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import BinaryIO
 
@@ -14,6 +15,7 @@ __all__ = [
     "GODOT_BIN_ENV",
     "ProcessError",
     "GodotProcess",
+    "godot_user_data_dir",
     "resolve_godot_binary",
 ]
 
@@ -25,20 +27,66 @@ ENV_TOKEN: str = "ENVMAKER_BRIDGE_TOKEN"
 
 GODOT_BIN_ENV: str = "GODOT_BIN"
 
-_DEFAULT_GODOT_BIN: Path = (
-    Path(__file__).resolve().parents[3]
-    / "tools/godot/Godot.app/Contents/MacOS/Godot"
+_REPO_ROOT: Path = Path(__file__).resolve().parents[3]
+_TOOLS_GODOT: Path = _REPO_ROOT / "tools" / "godot"
+
+_POSIX_SANITIZED_ENV_NAMES = ("PATH", "HOME", "USER", "TMPDIR")
+_WIN32_SANITIZED_ENV_NAMES = (
+    "SYSTEMROOT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
 )
 
 
+def godot_user_data_dir() -> Path:
+    """Platform Godot user-data directory (macOS verified; Linux/Windows best-effort)."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Godot"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "Godot"
+        return Path.home() / "AppData" / "Roaming" / "Godot"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / "godot"
+    return Path.home() / ".local" / "share" / "godot"
+
+
+def _vendored_godot_candidates() -> tuple[Path, ...]:
+    if sys.platform == "darwin":
+        return (_TOOLS_GODOT / "Godot.app" / "Contents" / "MacOS" / "Godot",)
+    if sys.platform == "win32":
+        return (_TOOLS_GODOT / "godot.exe", _TOOLS_GODOT / "Godot.exe")
+    return (
+        _TOOLS_GODOT / "godot",
+        _TOOLS_GODOT / "godot4",
+        _TOOLS_GODOT / "Godot",
+    )
+
+
 def resolve_godot_binary() -> Path:
-    """Resolve the Godot executable: $GODOT_BIN overrides the vendored default."""
+    """Resolve the Godot executable: $GODOT_BIN overrides platform vendored defaults."""
     override = os.environ.get(GODOT_BIN_ENV, "")
     if override:
         return Path(override)
-    return _DEFAULT_GODOT_BIN
+    candidates = _vendored_godot_candidates()
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
 
-_SANITIZED_ENV_NAMES = ("PATH", "HOME", "USER", "TMPDIR")
+
+def _sanitized_env_names() -> tuple[str, ...]:
+    if sys.platform == "win32":
+        return _POSIX_SANITIZED_ENV_NAMES + _WIN32_SANITIZED_ENV_NAMES
+    return _POSIX_SANITIZED_ENV_NAMES
+
+
+# Back-compat alias for tests/callers that still refer to the constant name.
+_SANITIZED_ENV_NAMES = _POSIX_SANITIZED_ENV_NAMES
 
 
 class ProcessError(RuntimeError):
@@ -101,7 +149,7 @@ class GodotProcess:
         ]
         child_env = {
             name: os.environ[name]
-            for name in _SANITIZED_ENV_NAMES
+            for name in _sanitized_env_names()
             if name in os.environ
         }
         child_env.update(

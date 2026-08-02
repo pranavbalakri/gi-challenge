@@ -1,0 +1,56 @@
+model: gpt-4o-mini
+prompt_version: "1"
+budgets:
+  max_turns: 8
+  wall_seconds: 600
+  limits:
+    cpu_seconds: 30.0
+    memory_mb: 512
+    output_bytes: 1048576
+    wall_seconds: 60.0
+seeds: [7]
+variants: [oneshot, loop]
+prompts:
+  - id: jungle_valley
+    text: jungle valley with a river and ruins
+    checklist:
+      - ground covers a connected valley floor
+      - a river/water band is present and blocks walking
+      - at least one ruin/structure is placed as a landmark goal
+      - spawn has a non-trivial route to the landmark
+  - id: frozen_village
+    text: a frozen village with a walled square and a watchtower
+    checklist:
+      - a walled square enclosure is visible
+      - a watchtower landmark is present
+      - walkable paths reach the watchtower from spawn
+      - ice/stone materials dominate the scene
+  - id: desert_canyon
+    text: desert canyon
+    checklist:
+      - a canyon corridor is formed by blockers/walls
+      - sand/dirt ground fills the floor
+      - a landmark sits at the far end of the canyon
+      - the agent can arrive without crossing blockers
+  - id: industrial_yard
+    text: industrial yard
+    checklist:
+      - yard ground is present with obstacle clutter
+      - at least one structure kit marks the industrial feel
+      - a clear lane remains walkable through the yard
+      - spawn-to-landmark route is non-trivial
+  - id: island_settlement
+    text: island settlement
+    checklist:
+      - water surrounds or strongly bounds the walkable land
+      - a settlement structure sits on the island
+      - spawn is on land and not in water
+      - landmark is reachable without leaving the island
+  - id: maze_garden
+    text: maze-like garden
+    checklist:
+      - walls/hedges form maze-like corridors
+      - ground fill is continuous under the maze
+      - a landmark marks the maze goal
+      - a navigable path exists from spawn to the landmark
+      - dead-end pockets do not fully isolate the spawn

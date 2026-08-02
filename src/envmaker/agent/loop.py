@@ -21,13 +21,13 @@ from envmaker.agent.providers import ProviderError as _ProviderError
 from envmaker.agent.tools import ToolContext as _ToolContext
 from envmaker.agent.tools import ToolSurface as _ToolSurface
 from envmaker.core.artifacts import canonical_fingerprint as _canonical_fingerprint
+from envmaker.core.artifacts import canonical_json as _canonical_json
 from envmaker.core.definition import seal_definition as _seal_definition
 from envmaker.core.episode import NavigationProbe as _NavigationProbe
 from envmaker.core.episode import TerminalReason as _TerminalReason
 from envmaker.core.program import EnvironmentProgram as _EnvironmentProgram
 from envmaker.core.program import ResourceLimits as _ResourceLimits
 from envmaker.core.requirements import PromptRequirementSet as _PromptRequirementSet
-from envmaker.core.scene_spec import PlaneVisual as _PlaneVisual
 from envmaker.runlog import RunLog as _RunLog
 from envmaker.sdk import SDK_VERSION as _SDK_VERSION
 from envmaker.validation import full_bundle as _full_bundle
@@ -71,6 +71,8 @@ class AuthoringOutcome(_BaseModel):
     bundle_sealed: bool
     run_dir: _Path
     failure_summary: str | None = None
+    definition_path: str | None = None
+    definition_fingerprint: str | None = None
 
 
 def _bound_json(payload: object) -> str:
@@ -80,23 +82,42 @@ def _bound_json(payload: object) -> str:
     return text.encode("utf-8")[:_RESULT_BYTES].decode("utf-8", errors="ignore")
 
 
+def _is_tool_exchange(message: dict[str, object]) -> bool:
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+    if message.get("role") == "assistant" and content.startswith("TOOL_CALL "):
+        return True
+    if message.get("role") == "user" and (
+        content.startswith("TOOL_RESULT ")
+        or content.startswith("NO PROGRAM EXISTS YET")
+        or content.startswith("Your last reply was empty")
+    ):
+        return True
+    return False
+
+
 def _trim_messages(messages: list[dict[str, object]]) -> None:
+    """Drop oldest tool exchanges first; never the system or task prompts.
+
+    Review finding (B2 MAJOR): dropping only TOOL_RESULT entries starved the
+    context of feedback while info-free TOOL_CALL stubs accumulated, and the
+    fallback eventually evicted the task prompt itself.
+    """
+
     while len(messages) > _MESSAGE_CAP:
         drop_at = None
+        # Indices 0 (system prompt) and 1 (task prompt) are pinned.
         for index, message in enumerate(messages):
-            if index == 0:
+            if index < 2:
                 continue
-            content = message.get("content")
-            if (
-                message.get("role") == "user"
-                and isinstance(content, str)
-                and content.startswith("TOOL_RESULT ")
-            ):
+            if _is_tool_exchange(message):
                 drop_at = index
                 break
         if drop_at is None:
-            # Never drop the system prompt; drop the oldest non-system entry.
-            drop_at = 1 if len(messages) > 1 else None
+            # Nothing tool-shaped left: drop the oldest entry after the two
+            # pinned prompts.
+            drop_at = 2 if len(messages) > 2 else None
         if drop_at is None:
             break
         messages.pop(drop_at)
@@ -116,36 +137,51 @@ def _default_driver_factory(run_dir: _Path) -> object:
     return driver
 
 
-def _ensure_probe(context: _ToolContext) -> None:
-    static = context.static
-    if static is None or static.candidate is None:
-        return
-    landmark_id = None
-    for node in static.candidate.scene.nodes:
-        if isinstance(node.visual, _PlaneVisual):
+def select_landmark_probe(
+    model: object,
+    candidate: object,
+) -> _NavigationProbe | None:
+    """Resolve the first declared landmark to the canonical navigation probe.
+
+    The ONLY probe-selection logic in the system: the first component in
+    declaration order with ``payload["component"] == "landmark"``, resolved to
+    its compiled ``{name}.0`` kit-part node. Returns None when no landmark
+    resolves. cli.py and evaluation.py must use this helper, never a local
+    heuristic.
+    """
+
+    node_ids = {
+        node.semantic_id
+        for node in getattr(getattr(candidate, "scene", None), "nodes", ())
+    }
+    for component in getattr(model, "components", ()):
+        payload = getattr(component, "payload", {}) or {}
+        if payload.get("component") != "landmark":
             continue
-        if node.collider is None and "." in node.semantic_id:
-            landmark_id = node.semantic_id
-            break
-        if node.collider is None:
-            landmark_id = node.semantic_id
-            break
-    if landmark_id is None:
-        for component in static.model.components if static.model else ():
-            if component.payload.get("component") == "landmark":
-                landmark_id = f"{component.semantic_id}.0"
-                break
-    if landmark_id is None:
+        candidate_id = f"{component.semantic_id}.0"
+        if candidate_id in node_ids:
+            return _NavigationProbe(
+                target_landmark_id=candidate_id,
+                success_radius_m=1.5,
+                max_ticks=2400,
+                action_repeat=1,
+                allowed_connector_types=(),
+                stuck_timeout_ticks=180,
+                terminal_reasons=(
+                    _TerminalReason.ARRIVED,
+                    _TerminalReason.TIMEOUT,
+                ),
+            )
+    return None
+
+
+def _ensure_probe(context: _ToolContext) -> None:
+    """Bind a navigation probe to the first declared landmark kit part."""
+
+    static = context.static
+    if static is None or static.model is None or static.candidate is None:
         return
-    context.probe = _NavigationProbe(
-        target_landmark_id=landmark_id,
-        success_radius_m=1.5,
-        max_ticks=2400,
-        action_repeat=1,
-        allowed_connector_types=(),
-        stuck_timeout_ticks=180,
-        terminal_reasons=(_TerminalReason.ARRIVED, _TerminalReason.TIMEOUT),
-    )
+    context.probe = select_landmark_probe(static.model, static.candidate)
 
 
 def _save_revision(context: _ToolContext, revision_dir: _Path) -> int:
@@ -200,20 +236,32 @@ def _dispatch_tool(
     return {"ok": False, "reason": f"unknown tool: {name}", "error": "tool_error"}
 
 
-def _try_accept(context: _ToolContext, *, prompt: str, provider: _Provider) -> bool:
+def _try_accept(
+    context: _ToolContext, *, prompt: str, provider: _Provider
+) -> tuple[str, str] | None:
+    """Seal and persist the definition when all hard stages passed.
+
+    Returns ``(definition_path, definition_fingerprint)`` relative to
+    ``run_dir``, or ``None`` when acceptance preconditions are unmet.
+    Persistence failures raise so the caller can downgrade to harness_error
+    without ever reporting ``bundle_sealed=True``.
+    """
+
     static = context.static
     if static is None or static.model is None or static.candidate is None:
-        return False
+        return None
     if not static.reports or not all(report.passed for report in static.reports):
-        return False
+        return None
     if not context.runtime_reports or not all(
         report.passed for report in context.runtime_reports
     ):
-        return False
+        return None
     bundle = _full_bundle(static, context.runtime_reports)
     if not bundle.all_passed():
-        return False
+        return None
 
+    # Prompt compliance is scored as a human-audited evaluation dimension
+    # (the eval YAML checklists), not a hard stage.
     requirements = _PromptRequirementSet(prompt=prompt, requirements=())
     descriptor = provider.descriptor
     if descriptor.prompt_version != _PROMPT_VERSION:
@@ -226,7 +274,7 @@ def _try_accept(context: _ToolContext, *, prompt: str, provider: _Provider) -> b
         prompt_fingerprint=requirements.prompt_fingerprint,
         provider=descriptor,
     )
-    _seal_definition(
+    definition = _seal_definition(
         static.candidate,
         bundle,
         requirements=requirements,
@@ -236,11 +284,48 @@ def _try_accept(context: _ToolContext, *, prompt: str, provider: _Provider) -> b
             {"candidate": static.candidate.candidate_fingerprint}
         ),
     )
+    rel_path = "environment-definition.json"
+    abs_path = context.run_dir / rel_path
+    try:
+        abs_path.write_text(_canonical_json(definition), encoding="utf-8")
+    except Exception as exc:
+        raise RuntimeError(
+            f"failed to persist sealed definition: {exc}"
+        ) from exc
     context.runlog.append(
         "outcome",
-        {"terminal_state": "accepted", "bundle_sealed": True},
+        {
+            "terminal_state": "accepted",
+            "bundle_sealed": True,
+            "definition_path": rel_path,
+            "definition_fingerprint": definition.definition_fingerprint,
+        },
     )
-    return True
+    return rel_path, definition.definition_fingerprint
+
+
+class _CallbackRunLog:
+    """RunLog wrapper that mirrors each append to an optional callback."""
+
+    def __init__(
+        self,
+        path: _Path,
+        on_event: _Callable[[str, dict], None] | None,
+    ) -> None:
+        self._inner = _RunLog(path)
+        self._on_event = on_event
+
+    def append(self, kind: str, payload: dict) -> None:
+        self._inner.append(kind, payload)
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(kind, payload)
+        except Exception:
+            pass
+
+    def events(self) -> list[dict]:
+        return self._inner.events()
 
 
 def run_authoring(
@@ -254,13 +339,14 @@ def run_authoring(
     driver_factory: _Callable[[_Path], object] | None = None,
     limits: _ResourceLimits | None = None,
     min_walkable_fraction: float = 0.5,
+    on_event: _Callable[[str, dict], None] | None = None,
 ) -> AuthoringOutcome:
     """Run the bounded authoring loop until acceptance or a terminal budget."""
 
     run_dir = _Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     revision_dir = run_dir / "revisions"
-    runlog = _RunLog(run_dir / "runlog.jsonl")
+    runlog = _CallbackRunLog(run_dir / "runlog.jsonl", on_event)
     resource_limits = limits or _DEFAULT_LIMITS
     factory = driver_factory or _default_driver_factory
 
@@ -268,7 +354,7 @@ def run_authoring(
         source="",
         limits=resource_limits,
         run_dir=run_dir,
-        runlog=runlog,
+        runlog=runlog,  # type: ignore[arg-type]
         min_walkable_fraction=min_walkable_fraction,
     )
     surface = _ToolSurface(context)
@@ -354,6 +440,33 @@ def run_authoring(
                     runlog.append(
                         "nudge", {"turn": turns_used, "reason": "empty reply"}
                     )
+                else:
+                    # Narration instead of action: a compiled-clean program
+                    # that was never (re)simulated cannot be accepted, so tell
+                    # the model exactly which tool advances the run.
+                    static = context.static
+                    static_clean = (
+                        static is not None
+                        and static.model is not None
+                        and bool(static.reports)
+                        and all(report.passed for report in static.reports)
+                    )
+                    runtime_clean = bool(context.runtime_reports) and all(
+                        report.passed for report in context.runtime_reports
+                    )
+                    if static_clean and not runtime_clean:
+                        action_nudge = (
+                            "Do not narrate. Call exactly one tool. If you "
+                            "believe the program is ready, call "
+                            "simulate_navigation now."
+                        )
+                        messages.append(
+                            {"role": "user", "content": action_nudge}
+                        )
+                        runlog.append(
+                            "nudge",
+                            {"turn": turns_used, "reason": "narration"},
+                        )
                 _trim_messages(messages)
                 continue
 
@@ -447,7 +560,11 @@ def run_authoring(
             _trim_messages(messages)
 
             if tool_name == "simulate_navigation" and result.get("ok"):
-                if _try_accept(context, prompt=prompt, provider=provider):
+                accepted = _try_accept(
+                    context, prompt=prompt, provider=provider
+                )
+                if accepted is not None:
+                    definition_path, definition_fingerprint = accepted
                     terminal_state = "accepted"
                     bundle_sealed = True
                     return AuthoringOutcome(
@@ -457,6 +574,8 @@ def run_authoring(
                         bundle_sealed=bundle_sealed,
                         run_dir=run_dir,
                         failure_summary=None,
+                        definition_path=definition_path,
+                        definition_fingerprint=definition_fingerprint,
                     )
 
         if terminal_state != "accepted":

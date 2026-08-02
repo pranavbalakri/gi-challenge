@@ -14,6 +14,7 @@ from PIL import Image
 from envmaker.core.contracts import ArtifactStore
 from envmaker.core.episode import NavigationProbe, TerminalReason
 from envmaker.core.scene_spec import CandidateScene
+from envmaker.godot_bridge.process import godot_user_data_dir
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -21,7 +22,12 @@ _SPINE = _REPO_ROOT / "examples/spine/candidate-scene.json"
 
 
 def _godot_user_dir_writable(home: Path | None = None) -> bool:
-    base = (home or Path.home()) / "Library" / "Application Support" / "Godot"
+    base = godot_user_data_dir()
+    if home is not None:
+        try:
+            base = home / base.relative_to(Path.home())
+        except ValueError:
+            base = home / base.name
     probe_dir = base if base.is_dir() else base.parent
     try:
         probe_dir.mkdir(parents=True, exist_ok=True)

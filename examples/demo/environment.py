@@ -67,7 +67,7 @@ def build_environment():
         min_spacing=3.0,
     )
     builder.spawn("wanderer", position=(-14.0, -14.0))
-    builder.camera(orthographic_size=24.0)
+    builder.camera(orthographic_size=30.0)
     return builder.freeze()
 
 

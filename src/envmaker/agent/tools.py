@@ -25,6 +25,7 @@ from envmaker.core.scene_spec import ColliderShape as _ColliderShape
 from envmaker.core.scene_spec import PlaneVisual as _PlaneVisual
 from envmaker.core.scene_spec import SceneNode as _SceneNode
 from envmaker.core.signals import Signal as _Signal
+from envmaker.core.signals import SignalSeverity as _SignalSeverity
 from envmaker.runlog import RunLog as _RunLog
 from envmaker.runlog import _redact as _redact_value
 from envmaker.sdk import SDK_VERSION as _SDK_VERSION
@@ -660,13 +661,6 @@ class ToolSurface:
             )
             self._log("simulate_navigation", {}, result.model_dump())
             return result
-        if self.context.probe is None:
-            result = NavigationResult(
-                ok=False,
-                reason="probe unavailable in static context",
-            )
-            self._log("simulate_navigation", {}, result.model_dump())
-            return result
         static = self.context.static
         if (
             static is None
@@ -677,6 +671,21 @@ class ToolSurface:
             result = NavigationResult(
                 ok=False,
                 reason="simulate requires a prior successful compile",
+            )
+            self._log("simulate_navigation", {}, result.model_dump())
+            return result
+        if self.context.probe is None:
+            signal = _Signal(
+                code="v7.no_landmark",
+                severity=_SignalSeverity.FAILURE,
+                message="navigation probe requires a declared landmark",
+                guidance="declare a landmark so navigation has a distinct goal",
+            )
+            result = NavigationResult(
+                ok=False,
+                stage_outcomes={_HardStage.CONTROLLER.value: False},
+                signals=(signal,),
+                reason="navigation probe requires a declared landmark",
             )
             self._log("simulate_navigation", {}, result.model_dump())
             return result

@@ -343,7 +343,7 @@ class _HappyDriver:
     def wait_navigation_ready(self, timeout: float = 30.0) -> None:
         return None
 
-    def connected_navigable_fraction(self) -> float:
+    def connected_clear_ground_fraction(self) -> float:
         return 0.8
 
     def navigate(self, probe: NavigationProbe) -> EpisodeResult:
@@ -376,7 +376,7 @@ class _LoadFailDriver(_HappyDriver):
 
 
 class _NavFailDriver(_HappyDriver):
-    def connected_navigable_fraction(self) -> float:
+    def connected_clear_ground_fraction(self) -> float:
         return 0.3
 
 
@@ -463,9 +463,9 @@ def test_navigation_fails_when_fraction_too_low() -> None:
     failure = next(
         signal
         for signal in by_stage[HardStage.NAVIGATION].signals
-        if signal.code == "v6.navigation_fraction"
+        if signal.code == "v6.clear_ground_fraction"
     )
-    assert failure.measurements["connected_fraction"] == pytest.approx(0.3)
+    assert failure.measurements["clear_ground_fraction"] == pytest.approx(0.3)
 
 
 def test_controller_fails_when_not_arrived() -> None:

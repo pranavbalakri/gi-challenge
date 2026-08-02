@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import re
 import secrets
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -20,11 +23,13 @@ from envmaker.godot_bridge.client import BridgeServer, BridgeSession
 from envmaker.godot_bridge.process import GodotProcess, resolve_godot_binary
 
 _AGENT_RADIUS = 0.4
+_RESOLUTION_PATTERN = re.compile(r"^\d{2,5}x\d{2,5}$")
+_DEFAULT_RESOLUTION = "320x180"
+_OFFSCREEN_POSITION = "4000,4000"
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GODOT_PROJECT = _REPO_ROOT / "godot"
-_WINDOWED_ARGS = ("--resolution", "320x180", "--position", "4000,4000")
 
 
 class RuntimeDriverError(RuntimeError):
@@ -39,6 +44,27 @@ class RenderUnavailableError(RuntimeDriverError):
     """Raised when the runtime cannot capture a render."""
 
 
+def windowed_extra_args(
+    *,
+    resolution: str = _DEFAULT_RESOLUTION,
+    window_args: tuple[str, ...] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Assemble Godot windowed argv extras without spawning a process.
+
+    Precedence: ``window_args`` (wholesale override) > ``ENVMAKER_RESOLUTION``
+    > ``resolution`` parameter. Environment is read at call time (not import).
+    """
+
+    if window_args is not None:
+        return window_args
+    env_map = os.environ if env is None else env
+    resolved = env_map.get("ENVMAKER_RESOLUTION", resolution)
+    if _RESOLUTION_PATTERN.fullmatch(resolved) is None:
+        raise RuntimeDriverError(f"invalid resolution: {resolved}")
+    return ("--resolution", resolved, "--position", _OFFSCREEN_POSITION)
+
+
 class RuntimeDriver:
     """Own one serial Godot process, bridge session, and simulation clock."""
 
@@ -50,12 +76,18 @@ class RuntimeDriver:
         run_dir: Path,
         session_id: str,
         windowed: bool = False,
+        window_args: tuple[str, ...] | None = None,
+        resolution: str = _DEFAULT_RESOLUTION,
     ) -> None:
         # Resolved: Godot's CWD is the project dir, so a relative run_dir would
         # make the bridge write artifacts under godot/ while Python reads here.
+        if _RESOLUTION_PATTERN.fullmatch(resolution) is None:
+            raise RuntimeDriverError(f"invalid resolution: {resolution}")
         self._run_dir = Path(run_dir).resolve()
         self._session_id = session_id
         self._windowed = windowed
+        self._window_args = window_args
+        self._resolution = resolution
         self._server: BridgeServer | None = None
         self._process: GodotProcess | None = None
         self._session: BridgeSession | None = None
@@ -80,6 +112,14 @@ class RuntimeDriver:
             self._server = server
             try:
                 host, port = server.listen()
+                if self._windowed:
+                    # Layering: window_args > ENVMAKER_RESOLUTION > param.
+                    extra_args = windowed_extra_args(
+                        resolution=self._resolution,
+                        window_args=self._window_args,
+                    )
+                else:
+                    extra_args = ()
                 process = GodotProcess(
                     godot_bin=resolve_godot_binary(),
                     project_path=_GODOT_PROJECT,
@@ -89,7 +129,7 @@ class RuntimeDriver:
                     token=token,
                     log_dir=self._run_dir / "logs",
                     run_root=self._run_dir,
-                    extra_args=_WINDOWED_ARGS if self._windowed else (),
+                    extra_args=extra_args,
                     headless=not self._windowed,
                 )
                 process.start()
@@ -180,21 +220,23 @@ class RuntimeDriver:
             )
             return EpisodeResult.model_validate(episode_payload)
 
-    def connected_navigable_fraction(
+    def connected_clear_ground_fraction(
         self,
         *,
         bounds: tuple[float, float, float, float],
         grid: int = 12,
         from_point: tuple[float, float] | None = None,
     ) -> float:
-        """Estimate the fraction of a ground lattice reachable from a point.
+        """Estimate the fraction of clear-ground cells reachable from a point.
 
-        Samples a ``grid×grid`` lattice over ``(min_x, min_z, max_x, max_z)``,
-        marks cells clear of blocker footprints, and flood-fills from
-        ``from_point`` (default: current agent via snapshot, else last spawn).
-        Returns reachable/total. Orchestrates over the candidate retained from
-        ``load_candidate`` plus ``snapshot`` for the origin — the bridge has no
-        standalone ``map_get_path`` message yet.
+        Samples a ``grid×grid`` lattice over ``(min_x, min_z, max_x, max_z)``
+        (typically the ground footprint bounds). Denominator = grid cells
+        inside those bounds that fall outside blocker footprints (clear
+        ground). Numerator = those clear cells reachable from ``from_point``
+        (default: current agent via snapshot, else last spawn) by a live
+        segment path probe. This is a sampled geometry flood-fill, not a
+        navmesh readout; Godot traversal (controller stage) remains the
+        authoritative witness.
         """
         with self._request_lock:
             if grid < 1:
@@ -231,6 +273,9 @@ class RuntimeDriver:
             walkable = [
                 [_point_clear(x, z, blockers) for z in zs] for x in xs
             ]
+            clear_count = sum(1 for row in walkable for cell in row if cell)
+            if clear_count == 0:
+                return 0.0
             # Seed BFS at the walkable cell nearest the origin.
             best: tuple[int, int] | None = None
             best_dist = float("inf")
@@ -265,7 +310,7 @@ class RuntimeDriver:
                         continue
                     seen[ni][nj] = True
                     queue.append((ni, nj))
-            return reachable / float(grid * grid)
+            return reachable / float(clear_count)
 
     def snapshot(self) -> WorldSnapshot:
         """Return a validated world snapshot at the next simulation tick."""

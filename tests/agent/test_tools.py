@@ -87,7 +87,7 @@ class _HappyDriver:
     def wait_navigation_ready(self, timeout: float = 30.0) -> None:
         return None
 
-    def connected_navigable_fraction(self) -> float:
+    def connected_clear_ground_fraction(self) -> float:
         return 0.9
 
     def navigate(self, probe: NavigationProbe) -> EpisodeResult:
@@ -272,7 +272,7 @@ def test_every_tool_call_is_logged_with_redaction(tmp_path: Path) -> None:
 
 
 class _LowFractionDriver(_HappyDriver):
-    def connected_navigable_fraction(self) -> float:
+    def connected_clear_ground_fraction(self) -> float:
         return 0.31
 
 
@@ -303,15 +303,15 @@ def test_simulate_navigation_distinguishes_fraction_from_bake_failure(
     bake_codes = {signal.code for signal in bake_result.signals}
     assert low_codes != bake_codes
     assert low_result.signals != bake_result.signals
-    assert "v6.navigation_fraction" in low_codes
-    assert "v6.navigation_fraction" not in bake_codes
+    assert "v6.clear_ground_fraction" in low_codes
+    assert "v6.clear_ground_fraction" not in bake_codes
     assert "v6.navigation_not_ready" in bake_codes
     fraction_signal = next(
         signal
         for signal in low_result.signals
-        if signal.code == "v6.navigation_fraction"
+        if signal.code == "v6.clear_ground_fraction"
     )
-    assert fraction_signal.measurements["connected_fraction"] == pytest.approx(0.31)
+    assert fraction_signal.measurements["clear_ground_fraction"] == pytest.approx(0.31)
     assert low.context.runtime_reports
     assert bake.context.runtime_reports
 

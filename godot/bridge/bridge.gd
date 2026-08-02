@@ -424,6 +424,7 @@ func _handle_load_candidate(body: Dictionary) -> void:
 	_world.add_child(_camera_rig)
 	_camera_rig.setup(float(orthographic_size_value))
 	_camera_rig.frame_isometric(_spawn)
+	_camera_rig.set_follow_target(_agent)
 	_candidate = candidate
 	_candidate_loaded = true
 	_send_success(

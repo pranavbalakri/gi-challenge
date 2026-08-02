@@ -84,14 +84,16 @@ class RuntimeDriverLike(_Protocol):
 
     Real ``RuntimeDriver`` methods used: ``load_candidate``, ``wait_navigation_ready``,
     ``navigate``, ``render``. Stubs (and a future driver shim) also expose
-    ``connected_navigable_fraction`` so navigation math stays in validation.py.
+    ``connected_clear_ground_fraction`` so connectivity math stays in validation.py.
     """
 
     def load_candidate(self, candidate: _CandidateScene) -> object: ...
 
     def wait_navigation_ready(self, timeout: float = 30.0) -> None: ...
 
-    def connected_navigable_fraction(self, *args: object, **kwargs: object) -> float: ...
+    def connected_clear_ground_fraction(
+        self, *args: object, **kwargs: object
+    ) -> float: ...
 
     def navigate(self, probe: _NavigationProbe) -> _EpisodeResult: ...
 
@@ -265,6 +267,12 @@ def _check_sdk_model(model: _EnvironmentModel) -> _StageReport:
 
 
 def _check_semantic(model: _EnvironmentModel) -> _StageReport:
+    """Validate the component graph (counts, ids, kits, scatter region).
+
+    This hard stage checks structural semantic validity of the model — not
+    prompt-faithfulness or user-intent compliance.
+    """
+
     signals: list[_Signal] = []
     grounds: list[str] = []
     spawns: list[str] = []
@@ -725,15 +733,15 @@ def _spawn_point(candidate: _CandidateScene) -> tuple[float, float] | None:
     return None
 
 
-def _connected_navigable_fraction(
+def _connected_clear_ground_fraction(
     driver: object,
     *,
     bounds: tuple[float, float, float, float],
     from_point: tuple[float, float] | None,
 ) -> float:
-    method = getattr(driver, "connected_navigable_fraction", None)
+    method = getattr(driver, "connected_clear_ground_fraction", None)
     if method is None:
-        raise RuntimeError("driver lacks connected_navigable_fraction")
+        raise RuntimeError("driver lacks connected_clear_ground_fraction")
     # Prefer a denser lattice than the driver default (12): narrow gate corridors
     # (~2.4 m) are otherwise invisible to grid flood-fill path queries.
     try:
@@ -807,13 +815,13 @@ def validate_candidate(
         bounds = _ground_bounds(candidate)
         if bounds is None:
             raise RuntimeError("candidate has no ground plane for navigation fraction")
-        fraction = _connected_navigable_fraction(
+        fraction = _connected_clear_ground_fraction(
             driver,
             bounds=bounds,
             from_point=_spawn_point(candidate),
         )
         if not _math.isfinite(fraction):
-            raise RuntimeError("connected navigable fraction is not finite")
+            raise RuntimeError("connected clear-ground fraction is not finite")
         if fraction < min_walkable_fraction:
             reports.append(
                 _report(
@@ -821,13 +829,19 @@ def validate_candidate(
                     passed=False,
                     signals=(
                         _failure(
-                            "v6.navigation_fraction",
-                            "connected navigable region fraction is below the threshold",
+                            "v6.clear_ground_fraction",
+                            "connected clear-ground fraction is below the threshold",
                             measurements={
-                                "connected_fraction": fraction,
+                                "clear_ground_fraction": fraction,
                                 "min_walkable_fraction": min_walkable_fraction,
                             },
-                            guidance="open corridors so most of the walkable area is connected",
+                            guidance=(
+                                "open corridors so most clear-ground cells "
+                                "(grid samples inside the ground footprint, "
+                                "excluding blocker footprints) are reachable "
+                                "from spawn; Godot traversal remains the "
+                                "authoritative witness"
+                            ),
                         ),
                     ),
                 )

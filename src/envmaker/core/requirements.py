@@ -46,7 +46,12 @@ class Requirement(_BaseModel):
 
 
 class PromptRequirementSet(_BaseModel):
-    """The immutable requirement inventory for one source prompt."""
+    """The immutable requirement inventory for one source prompt.
+
+    Hard stages validate the component graph and geometry; prompt compliance
+    against ``requirements`` is a human-audited evaluation dimension (eval YAML
+    checklists), not a seal gate.
+    """
 
     model_config = _ConfigDict(frozen=True, extra="forbid")
 

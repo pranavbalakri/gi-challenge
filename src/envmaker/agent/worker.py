@@ -1,11 +1,14 @@
-"""Fault-contained execution of generated EnvMaker environment programs."""
+"""Fault-contained execution of generated EnvMaker environment programs.
+
+On non-POSIX platforms containment is wall-clock timeout + output caps only (no rlimits).
+"""
 
 from __future__ import annotations
 
 import ast as _ast
 import hashlib as _hashlib
 import math as _math
-import resource as _resource
+import os as _os
 import shutil as _shutil
 import signal as _signal
 import subprocess as _subprocess
@@ -13,6 +16,11 @@ import sys as _sys
 import tempfile as _tempfile
 import time as _time
 from pathlib import Path as _Path
+
+try:
+    import resource as _resource
+except ImportError:  # Windows (and other non-POSIX) — no rlimit support
+    _resource = None
 
 import envmaker as _envmaker
 from envmaker.core.artifacts import canonical_fingerprint as _canonical_fingerprint
@@ -114,6 +122,9 @@ def _static_gate_rejects(source: str) -> bool:
 
 
 def _make_preexec(limits: _ResourceLimits):
+    if _resource is None or _os.name != "posix":
+        return None
+
     cpu_limit = int(_math.ceil(limits.cpu_seconds))
     memory_bytes = int(limits.memory_mb) * 1024 * 1024
 
@@ -125,6 +136,12 @@ def _make_preexec(limits: _ResourceLimits):
             pass
 
     return _apply_limits
+
+
+def _is_cpu_limit_returncode(returncode: int) -> bool:
+    """True when returncode is -SIGXCPU; False when SIGXCPU is unavailable."""
+    sigxcpu = getattr(_signal, "SIGXCPU", None)
+    return sigxcpu is not None and returncode == -int(sigxcpu)
 
 
 def _rejected_execution(
@@ -235,7 +252,7 @@ def run_generated_program(
             len(stdout) > limits.output_bytes or len(stderr) > limits.output_bytes
         ):
             exit_reason = _WorkerExitReason.RESOURCE_LIMIT
-        elif process.returncode == -int(_signal.SIGXCPU):
+        elif _is_cpu_limit_returncode(process.returncode):
             exit_reason = _WorkerExitReason.RESOURCE_LIMIT
         elif process.returncode != 0:
             exit_reason = _WorkerExitReason.CRASH

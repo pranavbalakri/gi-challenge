@@ -1,0 +1,298 @@
+{
+  "config": {
+    "budgets": {
+      "limits": {
+        "cpu_seconds": 30.0,
+        "memory_mb": 512,
+        "output_bytes": 1048576,
+        "wall_seconds": 60.0
+      },
+      "max_turns": 8,
+      "wall_seconds": 600
+    },
+    "eval_root": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7",
+    "model": "gpt-4o-mini",
+    "prompt_version": "1",
+    "prompts": [
+      {
+        "checklist": [
+          "ground covers a connected valley floor",
+          "a river/water band is present and blocks walking",
+          "at least one ruin/structure is placed as a landmark goal",
+          "spawn has a non-trivial route to the landmark"
+        ],
+        "id": "jungle_valley",
+        "text": "jungle valley with a river and ruins"
+      },
+      {
+        "checklist": [
+          "a walled square enclosure is visible",
+          "a watchtower landmark is present",
+          "walkable paths reach the watchtower from spawn",
+          "ice/stone materials dominate the scene"
+        ],
+        "id": "frozen_village",
+        "text": "a frozen village with a walled square and a watchtower"
+      },
+      {
+        "checklist": [
+          "a canyon corridor is formed by blockers/walls",
+          "sand/dirt ground fills the floor",
+          "a landmark sits at the far end of the canyon",
+          "the agent can arrive without crossing blockers"
+        ],
+        "id": "desert_canyon",
+        "text": "desert canyon"
+      },
+      {
+        "checklist": [
+          "yard ground is present with obstacle clutter",
+          "at least one structure kit marks the industrial feel",
+          "a clear lane remains walkable through the yard",
+          "spawn-to-landmark route is non-trivial"
+        ],
+        "id": "industrial_yard",
+        "text": "industrial yard"
+      },
+      {
+        "checklist": [
+          "water surrounds or strongly bounds the walkable land",
+          "a settlement structure sits on the island",
+          "spawn is on land and not in water",
+          "landmark is reachable without leaving the island"
+        ],
+        "id": "island_settlement",
+        "text": "island settlement"
+      },
+      {
+        "checklist": [
+          "walls/hedges form maze-like corridors",
+          "ground fill is continuous under the maze",
+          "a landmark marks the maze goal",
+          "a navigable path exists from spawn to the landmark",
+          "dead-end pockets do not fully isolate the spawn"
+        ],
+        "id": "maze_garden",
+        "text": "maze-like garden"
+      }
+    ],
+    "seeds": [
+      7
+    ],
+    "variants": [
+      "oneshot",
+      "loop"
+    ]
+  },
+  "eval_root": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7",
+  "results": [
+    {
+      "accepted": false,
+      "error": "static validation failed",
+      "prompt_id": "jungle_valley",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/jungle_valley-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "program": false
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 2.671559915994294
+    },
+    {
+      "accepted": false,
+      "error": "turn or wall budget exhausted",
+      "prompt_id": "jungle_valley",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/jungle_valley-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 8,
+      "variant": "loop",
+      "wall_seconds": 8.681668542005355
+    },
+    {
+      "accepted": false,
+      "error": "no landmark probe available",
+      "prompt_id": "frozen_village",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/frozen_village-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 3.1666204999783076
+    },
+    {
+      "accepted": false,
+      "error": "turn or wall budget exhausted",
+      "prompt_id": "frozen_village",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/frozen_village-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "controller": false,
+        "materialization": true,
+        "navigation": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 8,
+      "variant": "loop",
+      "wall_seconds": 13.289702207985101
+    },
+    {
+      "accepted": false,
+      "error": "static validation failed",
+      "prompt_id": "desert_canyon",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/desert_canyon-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "program": false
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 2.836543040990364
+    },
+    {
+      "accepted": false,
+      "error": "turn or wall budget exhausted",
+      "prompt_id": "desert_canyon",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/desert_canyon-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "program": false
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 8,
+      "variant": "loop",
+      "wall_seconds": 15.148830334015656
+    },
+    {
+      "accepted": false,
+      "error": "static validation failed",
+      "prompt_id": "industrial_yard",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/industrial_yard-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "program": false
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 2.8370975000143517
+    },
+    {
+      "accepted": true,
+      "error": null,
+      "prompt_id": "industrial_yard",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/industrial_yard-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "camera": true,
+        "controller": true,
+        "materialization": true,
+        "navigation": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "accepted",
+      "turns_used": 3,
+      "variant": "loop",
+      "wall_seconds": 8.308210167015204
+    },
+    {
+      "accepted": false,
+      "error": "static validation failed",
+      "prompt_id": "island_settlement",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/island_settlement-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "program": false
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 3.951321166008711
+    },
+    {
+      "accepted": false,
+      "error": "turn or wall budget exhausted",
+      "prompt_id": "island_settlement",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/island_settlement-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "controller": false,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 8,
+      "variant": "loop",
+      "wall_seconds": 10.048617874999763
+    },
+    {
+      "accepted": false,
+      "error": "no landmark probe available",
+      "prompt_id": "maze_garden",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/maze_garden-oneshot-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "rejected_after_budget",
+      "turns_used": 1,
+      "variant": "oneshot",
+      "wall_seconds": 3.5051471670158207
+    },
+    {
+      "accepted": true,
+      "error": null,
+      "prompt_id": "maze_garden",
+      "run_dir": "/Users/pranavbalakri/recruiting-oas/gi/runs/eval/20260801-233206-33e507f7/maze_garden-loop-s7",
+      "seed": 7,
+      "stages_passed": {
+        "asset": true,
+        "camera": true,
+        "controller": true,
+        "materialization": true,
+        "navigation": true,
+        "program": true,
+        "scene": true,
+        "sdk_model": true,
+        "semantic": true
+      },
+      "terminal_state": "accepted",
+      "turns_used": 7,
+      "variant": "loop",
+      "wall_seconds": 13.346266000007745
+    }
+  ]
+}
