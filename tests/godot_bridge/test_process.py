@@ -610,3 +610,41 @@ def test_worker_sigxcpu_absent_falls_through_to_crash(
     # RESOURCE_LIMIT when the signal is unavailable.
     assert worker._is_cpu_limit_returncode(-24) is False
     assert worker._is_cpu_limit_returncode(-1) is False
+
+
+def test_extra_env_reaches_child_but_cannot_spoof_bridge_vars(
+    tmp_path: Path,
+) -> None:
+    child = _write_child(
+        tmp_path,
+        """\
+import json
+import os
+
+print(json.dumps({
+    "hide": os.environ.get("ENVMAKER_HIDE_WINDOW"),
+    "token": os.environ.get("ENVMAKER_BRIDGE_TOKEN"),
+}))
+""",
+    )
+    token = "real-token"
+    process = GodotProcess(
+        godot_bin=child,
+        project_path=tmp_path,
+        host="127.0.0.1",
+        port=7654,
+        session_id="sess-1",
+        token=token,
+        log_dir=tmp_path / "logs",
+        extra_env={
+            "ENVMAKER_HIDE_WINDOW": "1",
+            "ENVMAKER_BRIDGE_TOKEN": "spoof-attempt",
+        },
+    )
+
+    process.start()
+    assert process.wait_closed(10.0) == 0
+
+    payload = json.loads(process.stdout_path.read_text())
+    assert payload["hide"] == "1", "extra_env must reach the child"
+    assert payload["token"] == token, "bridge vars must win over extra_env"

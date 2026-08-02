@@ -103,6 +103,7 @@ class GodotProcess:
         run_root: Path | None = None,
         extra_args: tuple[str, ...] = (),
         headless: bool = True,
+        extra_env: dict[str, str] | None = None,
     ) -> None:
         self._godot_bin = godot_bin
         self._project_path = project_path
@@ -114,6 +115,7 @@ class GodotProcess:
         self._run_root = run_root
         self._extra_args = extra_args
         self._headless = headless
+        self._extra_env = dict(extra_env or {})
 
         self._process: subprocess.Popen[bytes] | None = None
         self._exit_code: int | None = None
@@ -126,7 +128,11 @@ class GodotProcess:
         if not self._godot_bin.is_file() or not os.access(
             self._godot_bin, os.X_OK
         ):
-            raise ProcessError("godot binary not found")
+            raise ProcessError(
+                f"godot binary not found at {self._godot_bin} — run "
+                "`uv run python scripts/get_godot.py` to download Godot "
+                "4.7.1 for this platform, or set GODOT_BIN=<path>"
+            )
 
         self._log_dir.mkdir(parents=True, exist_ok=True)
         stdout_handle = self.stdout_path.open("wb")
@@ -157,6 +163,9 @@ class GodotProcess:
                 if name.startswith("ENVMAKER_") and name not in child_env
             }
         )
+        # Per-process knobs (e.g. hidden validation windows) must not leak
+        # between drivers via os.environ, so they ride explicitly.
+        child_env.update(self._extra_env)
         child_env.update(
             {
                 ENV_HOST: self._host,

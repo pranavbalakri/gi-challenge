@@ -78,6 +78,7 @@ class RuntimeDriver:
         windowed: bool = False,
         window_args: tuple[str, ...] | None = None,
         resolution: str = _DEFAULT_RESOLUTION,
+        hidden: bool = False,
     ) -> None:
         # Resolved: Godot's CWD is the project dir, so a relative run_dir would
         # make the bridge write artifacts under godot/ while Python reads here.
@@ -87,6 +88,9 @@ class RuntimeDriver:
         self._session_id = session_id
         self._windowed = windowed
         self._window_args = window_args
+        # macOS clamps off-screen windows back onto the screen, so hiding is
+        # done by the bridge minimizing itself before the first frame.
+        self._hidden = hidden
         self._resolution = resolution
         self._server: BridgeServer | None = None
         self._process: GodotProcess | None = None
@@ -131,6 +135,9 @@ class RuntimeDriver:
                     run_root=self._run_dir,
                     extra_args=extra_args,
                     headless=not self._windowed,
+                    extra_env=(
+                        {"ENVMAKER_HIDE_WINDOW": "1"} if self._hidden else None
+                    ),
                 )
                 process.start()
                 self._process = process

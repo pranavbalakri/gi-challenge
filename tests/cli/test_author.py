@@ -135,3 +135,46 @@ def test_author_cli_init_and_step(tmp_path: Path, monkeypatch) -> None:
     step = _RUNNER.invoke(app, ["author", "step", str(run_dirs[0])])
     assert step.exit_code == 1
     assert "starter template" in step.output
+
+
+def test_step_reports_runtime_unavailable_not_crash(tmp_path: Path) -> None:
+    run_dir = tmp_path / "session"
+    init_session("village green", 7, run_dir)
+    (run_dir / "environment.py").write_text(_DEMO_SOURCE)
+
+    def _broken_factory(rd: Path) -> object:
+        raise RuntimeError("godot binary not found at /nowhere — run ...")
+
+    outcome = step_session(run_dir, driver_factory=_broken_factory)
+    assert outcome.status == "runtime_unavailable"
+    assert outcome.stages.get("scene") is True, "static results must survive"
+    code, message, guidance = outcome.signals[0]
+    assert code == "harness.godot_unavailable"
+    assert "godot binary not found" in message
+    assert "xvfb" in guidance
+
+
+def test_get_godot_asset_matrix() -> None:
+    import sys
+
+    sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+    try:
+        from get_godot import build_asset_name, expected_binary
+    finally:
+        sys.path.pop(0)
+
+    assert build_asset_name("Darwin", "arm64").endswith("macos.universal.zip")
+    assert build_asset_name("Linux", "x86_64").endswith("linux.x86_64.zip")
+    assert build_asset_name("Linux", "aarch64").endswith("linux.arm64.zip")
+    assert build_asset_name("Windows", "AMD64").endswith("win64.exe.zip")
+    assert expected_binary("Darwin").name == "Godot"
+    assert expected_binary("Linux").name == "godot"
+    assert expected_binary("Windows").name == "godot.exe"
+
+
+def test_agent_entry_docs_exist() -> None:
+    claude_md = " ".join((_REPO_ROOT / "CLAUDE.md").read_text().split())
+    agents_md = " ".join((_REPO_ROOT / "AGENTS.md").read_text().split())
+    for needle in ("author init", "get_godot.py", "Never modify the harness"):
+        assert needle in claude_md
+    assert "author init" in agents_md and "get_godot.py" in agents_md

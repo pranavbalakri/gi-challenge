@@ -16,12 +16,15 @@ Running the harness can be done as described below, in Claude Code. I did it in 
 
 The harness validates (nine hard stages), simulates traversal, renders, and seals `environment-definition.json`; the agent does all the authoring and visual judgment with its own file tools and vision. (`envmaker run` remains the autonomous API-keyed mode; `demo` and `check` stay keyless.)
 
-**Requirements:** Python 3.12, [uv](https://docs.astral.sh/uv/), and a Godot 4.7.1 binary — either placed at `tools/godot/Godot.app` (kept local; not committed to git) or pointed to via `GODOT_BIN=<path>`. Developed and verified on macOS arm64; Linux is best-effort via `GODOT_BIN` (headless boxes need a virtual display such as `xvfb-run` for the windowed render capture); Windows is untested.
+**Requirements:** Python 3.12 and [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`). Godot 4.7.1 is fetched by a script — a fresh clone needs no pre-installed Godot. Developed and verified on macOS arm64; the fetch script also serves Linux x86_64/arm64 and Windows (headless Linux boxes need a virtual display such as `xvfb-run` for the windowed render capture). If you already have Godot 4.7.1, set `GODOT_BIN=<path>` instead.
 
 ```bash
 uv sync
+uv run python scripts/get_godot.py          # downloads the pinned Godot 4.7.1 for this platform
 uv run python scripts/verify_toolchain.py   # verifies the Python + Godot pins
 ```
+
+(Claude Code and Codex read `CLAUDE.md` / `AGENTS.md` automatically, which contain these same setup steps plus the authoring workflow — so "clone and run `claude`" is enough.)
 
 **The four commands:**
 
@@ -43,6 +46,8 @@ uv run envmaker run "a frozen village with a walled square and a watchtower" --s
 #    and the headless demo, aggregated into three PASS/FAIL lines.
 uv run envmaker check
 ```
+
+Validation runs (every `author step`, `run` attempt, and the headless demo) keep their Godot process minimized — nothing pops onto your screen. A visible window opens only for presentation: `demo --view`, `author open`, and `run --open`.
 
 **What a run leaves behind** (`runs/<id>/`): `runlog.jsonl` (redacted event trace), `revisions/rev-N.py` (every source revision), `runtime/artifacts/*.png` (content-addressed isometric + top-down renders), and — only on acceptance — `environment-definition.json`, the sealed, canonically fingerprinted definition.
 

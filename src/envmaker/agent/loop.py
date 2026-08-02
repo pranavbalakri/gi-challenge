@@ -161,6 +161,7 @@ def _default_driver_factory(run_dir: _Path) -> object:
         run_dir=run_dir / "runtime",
         session_id="run-" + _uuid.uuid4().hex[:12],
         windowed=True,
+        hidden=True,
     )
     driver.start()
     return driver

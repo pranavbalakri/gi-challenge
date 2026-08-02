@@ -53,6 +53,14 @@ var _candidate_loaded := false
 
 
 func _ready() -> void:
+	# Validation runs must not flash a window on the user's screen; renders
+	# still work minimized because capture() force-draws the viewport.
+	if (
+		OS.get_environment("ENVMAKER_HIDE_WINDOW") == "1"
+		and DisplayServer.get_name() != "headless"
+	):
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
+		print("[bridge] window hidden (minimized) for validation run")
 	var port_text := OS.get_environment("ENVMAKER_BRIDGE_PORT")
 	if port_text.is_empty():
 		print("[bridge] idle (no ENVMAKER_BRIDGE_PORT)")

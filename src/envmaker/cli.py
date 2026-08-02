@@ -180,6 +180,7 @@ def run_demo_pipeline(
             session_id="demo-" + _uuid.uuid4().hex[:12],
             windowed=True,
             window_args=_VIEW_WINDOW_ARGS if view else None,
+            hidden=not view,
         )
         driver.start()
         runtime_reports = _validate_candidate(
@@ -683,6 +684,12 @@ def author_step(
         typer.echo(f"definition: {run_dir / (outcome.definition_path or '')}")
         typer.echo(f"definition_fingerprint: {outcome.definition_fingerprint}")
         typer.echo("ACCEPTED — all nine stages passed and the definition is sealed.")
+        raise typer.Exit(0)
+    if outcome.status == "runtime_unavailable":
+        typer.echo(
+            "status: runtime_unavailable — the program is statically valid "
+            "but the Godot runtime could not start (see the signal above)."
+        )
         raise typer.Exit(0)
     typer.echo(f"status: {outcome.status} — edit environment.py and re-run this step.")
     raise typer.Exit(0)

@@ -176,18 +176,39 @@ def step_session(
     driver = None
     renders: list[str] = []
     try:
-        if driver_factory is not None:
-            driver = driver_factory(run_dir)
-        else:
-            from envmaker.runtime import RuntimeDriver
-            import uuid as _uuid
+        try:
+            if driver_factory is not None:
+                driver = driver_factory(run_dir)
+            else:
+                from envmaker.runtime import RuntimeDriver
+                import uuid as _uuid
 
-            driver = RuntimeDriver(
-                run_dir=run_dir / "runtime",
-                session_id="author-" + _uuid.uuid4().hex[:12],
-                windowed=True,
+                driver = RuntimeDriver(
+                    run_dir=run_dir / "runtime",
+                    session_id="author-" + _uuid.uuid4().hex[:12],
+                    windowed=True,
+                    hidden=True,
+                )
+                driver.start()
+        except Exception as exc:
+            # Static validation already passed; report the runtime as
+            # unavailable with a remedy instead of crashing the session.
+            runlog.append(
+                "step",
+                {"status": "runtime_unavailable", "stages": stages},
             )
-            driver.start()
+            return StepOutcome(
+                status="runtime_unavailable",
+                stages=stages,
+                signals=(
+                    (
+                        "harness.godot_unavailable",
+                        f"runtime unavailable: {exc}",
+                        "static stages all passed; on a headless Linux box "
+                        "run under a virtual display (e.g. xvfb-run)",
+                    ),
+                ),
+            )
 
         probe = _select_landmark_probe(static.model, static.candidate)
         if probe is None:
