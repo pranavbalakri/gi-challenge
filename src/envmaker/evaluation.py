@@ -696,7 +696,7 @@ def write_report(
     lines.append("")
     lines.append("## Limitations")
     lines.append("")
-    for limitation in _STANDING_LIMITATIONS:
+    for limitation in _standing_limitations(config):
         lines.append(f"- {limitation}")
     lines.append("")
 
@@ -725,23 +725,34 @@ def write_report(
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-_STANDING_LIMITATIONS: tuple[str, ...] = (
-    "Sample size: six prompts, one seed, two variants; rates are directional "
-    "evidence for the loop-vs-oneshot comparison, not statistics.",
-    "Base model: the default is weak (`gpt-4o-mini`) and acceptance is "
-    "sensitive to harness affordances (nudges); the frozen same-model "
-    "comparison is what the claim rests on.",
-    "Budgets: 8 provider turns / 600 s wall per run; runs one repair short "
-    "of acceptance count as rejected, and budgets are never extended.",
-    "Strict baseline: the one-shot variant gets the identical prompt but no "
-    "tool execution and no feedback; the measured gap is the value of typed "
-    "feedback, not prompt engineering.",
-    "Loop stage attribution derives from observed compile events in the "
-    "runlog; a run that never re-compiled reports its last known stages.",
-    "Prompt compliance is human-scored via the YAML checklists, not a hard "
-    "validator stage; runtime scope is a single walkable plane with "
-    "box/cylinder primitives, verified on macOS arm64.",
-)
+def _standing_limitations(config: dict) -> tuple[str, ...]:
+    """Limitations text derived from the config so it cannot go stale."""
+
+    model_name = str(config.get("model", "gpt-4o-mini"))
+    budgets = dict(config.get("budgets") or {})
+    max_turns = int(budgets.get("max_turns", 8))
+    wall_seconds = float(budgets.get("wall_seconds", 600.0))
+    return (
+        "Sample size: six prompts, one seed, two variants; rates are "
+        "directional evidence for the loop-vs-oneshot comparison, not "
+        "statistics.",
+        f"Base model: `{model_name}` for both variants; acceptance is "
+        "sensitive to harness affordances (nudges); the frozen same-model "
+        "comparison is what the claim rests on.",
+        f"Budgets: {max_turns} provider turns / {wall_seconds:.0f} s wall "
+        "per run; runs one repair short of acceptance count as rejected, "
+        "and budgets are never extended.",
+        "Strict baseline: the one-shot variant gets the identical prompt "
+        "but no tool execution and no feedback; the measured gap is the "
+        "value of typed feedback, not prompt engineering.",
+        "Loop stage attribution derives from observed compile events in "
+        "the runlog; a run that never re-compiled reports its last known "
+        "stages.",
+        "Prompt compliance is human-scored via the YAML checklists, not a "
+        "hard validator stage; runtime scope is a single walkable plane "
+        "with primitive geometry (boxes, cylinders, spheres, cones, spline "
+        "ribbons), verified on macOS arm64.",
+    )
 
 
 def _repo_relative(value: str) -> str:

@@ -154,9 +154,14 @@ def test_kit_part_shape_exclusivity() -> None:
     ):
         KitPart(shape="box", offset=(0.0, 0.0, 0.0), size=(0.0, 1.0, 1.0),
                 material="stone")
-    with pytest.raises(ValidationError, match="unknown material: chrome"):
+    # KitPart validates the material NAME only (custom kits may reference
+    # declared custom materials); existence is enforced by the builder.
+    loose = KitPart(shape="box", offset=(0.0, 0.0, 0.0), size=(1.0, 1.0, 1.0),
+                    material="chrome")
+    assert loose.material == "chrome"
+    with pytest.raises(ValidationError, match="invalid material name"):
         KitPart(shape="box", offset=(0.0, 0.0, 0.0), size=(1.0, 1.0, 1.0),
-                material="chrome")
+                material="Not A Name")
 
 
 def test_kit_blocking_is_explicit() -> None:
@@ -387,8 +392,13 @@ def test_sdk_public_surface() -> None:
 
     assert list(sdk.__all__) == [
         "SDK_VERSION",
+        "PALETTE_KEYS",
         "EnvironmentBuilder",
         "Polygon2D",
+        "BoxPart",
+        "CylinderPart",
+        "ConePart",
+        "SpherePart",
         "compile_environment_model",
         "get_kit",
         "KITS",

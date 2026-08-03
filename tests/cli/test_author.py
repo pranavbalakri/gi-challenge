@@ -178,3 +178,27 @@ def test_agent_entry_docs_exist() -> None:
     for needle in ("author init", "get_godot.py", "Never modify the harness"):
         assert needle in claude_md
     assert "author init" in agents_md and "get_godot.py" in agents_md
+
+
+def test_step_snapshots_distinct_revisions(tmp_path: Path) -> None:
+    run_dir = tmp_path / "session"
+    init_session("revision trail", 7, run_dir)
+    bad_v1 = "import os\nenvironment = None\n"
+    bad_v2 = "import sys\nenvironment = None\n"
+
+    (run_dir / "environment.py").write_text(bad_v1)
+    step_session(run_dir)
+    (run_dir / "environment.py").write_text(bad_v1)  # unchanged re-step
+    step_session(run_dir)
+    (run_dir / "environment.py").write_text(bad_v2)
+    step_session(run_dir)
+
+    revisions = sorted((run_dir / "revisions").glob("rev-*.py"))
+    assert [p.name for p in revisions] == ["rev-1.py", "rev-2.py"]
+    assert revisions[0].read_text() == bad_v1
+    assert revisions[1].read_text() == bad_v2
+    events = [
+        json.loads(line)
+        for line in (run_dir / "runlog.jsonl").read_text().splitlines()
+    ]
+    assert sum(1 for e in events if e.get("kind") == "revision") == 2

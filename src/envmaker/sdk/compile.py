@@ -17,7 +17,9 @@ from envmaker.core.scene_spec import ColliderShape as _ColliderShape
 from envmaker.core.scene_spec import ColliderSpec as _ColliderSpec
 from envmaker.core.scene_spec import CylinderVisual as _CylinderVisual
 from envmaker.core.scene_spec import GodotSceneSpec as _GodotSceneSpec
+from envmaker.core.scene_spec import MaterialSpec as _MaterialSpec
 from envmaker.core.scene_spec import PlaneVisual as _PlaneVisual
+from envmaker.core.scene_spec import PresentationSpec as _PresentationSpec
 from envmaker.core.scene_spec import RibbonVisual as _RibbonVisual
 from envmaker.core.scene_spec import SceneNode as _SceneNode
 from envmaker.core.scene_spec import SphereVisual as _SphereVisual
@@ -25,11 +27,12 @@ from envmaker.sdk.footprints import Polygon2D as _Polygon2D
 from envmaker.sdk.footprints import min_area_obb as _min_area_obb
 from envmaker.sdk.footprints import polygon_bounds as _polygon_bounds
 from envmaker.sdk.footprints import polygon_contains as _polygon_contains
+from envmaker.sdk.kits import CURATED_MATERIALS as _CURATED_MATERIALS
 from envmaker.sdk.kits import Kit as _Kit
 from envmaker.sdk.kits import KitPart as _KitPart
 from envmaker.sdk.kits import get_kit as _get_kit
 
-__all__ = ["compile_environment_model"]
+__all__ = ["compile_environment_model", "model_kit_resolver"]
 
 _Point = tuple[float, float]
 
@@ -143,6 +146,48 @@ def _point_in_wall_rect(
     along = rel_x * along_x + rel_z * along_z
     across = rel_x * across_x + rel_z * across_z
     return 0.0 <= along <= length and abs(across) <= thickness / 2.0
+
+
+def _parse_custom_kits(
+    components: tuple[_Any, ...],
+) -> dict[str, _Kit]:
+    """Rebuild declared custom kits from their model payloads."""
+
+    kits: dict[str, _Kit] = {}
+    for component in components:
+        payload = component.payload
+        if payload.get("component") != "custom_kit":
+            continue
+        parts = []
+        for entry in payload["parts"]:
+            fields: dict[str, _Any] = {
+                "shape": str(entry["shape"]),
+                "offset": (
+                    float(entry["offset"][0]),
+                    float(entry["offset"][1]),
+                    float(entry["offset"][2]),
+                ),
+                "material": str(entry["material"]),
+                "yaw_degrees": float(entry.get("yaw_degrees", 0.0)),
+            }
+            if "size" in entry:
+                fields["size"] = (
+                    float(entry["size"][0]),
+                    float(entry["size"][1]),
+                    float(entry["size"][2]),
+                )
+            if "radius" in entry:
+                fields["radius"] = float(entry["radius"])
+            if "height" in entry:
+                fields["height"] = float(entry["height"])
+            parts.append(_KitPart(**fields))
+        kits[component.semantic_id] = _Kit(
+            name=component.semantic_id,
+            category=str(payload["category"]),  # type: ignore[arg-type]
+            blocking=bool(payload["blocking"]),
+            parts=tuple(parts),
+        )
+    return kits
 
 
 def _part_visual(
@@ -284,9 +329,10 @@ def _compile_kit_parts(
                 node_id = _dotted_id(name, placement_index, part_index)
             semantic_id = node_id
 
+            part_local_yaw = _math.radians(part.yaw_degrees)
             if not use_scaled:
                 world_offset = part.offset
-                part_yaw = None
+                part_yaw = part_local_yaw if part_local_yaw != 0.0 else None
                 if part.shape == "box":
                     assert part.size is not None
                     size, radius, height = part.size, None, None
@@ -303,7 +349,7 @@ def _compile_kit_parts(
                     part.offset[2] * scale_z,
                 )
                 world_offset = _rotate_offset(scaled_offset, place_yaw)
-                part_yaw = place_yaw
+                part_yaw = place_yaw + part_local_yaw
                 size, radius, height = _scaled_part_dims(
                     part, scale_x, scale_y, scale_z
                 )
@@ -442,10 +488,14 @@ def _compile_obstacle(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
     ]
 
 
-def _compile_structure(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
+def _compile_structure(
+    name: str,
+    payload: dict[str, _Any],
+    resolve_kit: _Any = _get_kit,
+) -> list[_SceneNode]:
     fit = _min_area_obb(_polygon_from_payload(payload))
     height = float(payload["height"])
-    kit = _get_kit(str(payload["kit"]))
+    kit = resolve_kit(str(payload["kit"]))
     center_x, center_z = fit.center
     yaw = -fit.yaw
     return _compile_kit_parts(
@@ -458,9 +508,13 @@ def _compile_structure(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
     )
 
 
-def _compile_landmark(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
+def _compile_landmark(
+    name: str,
+    payload: dict[str, _Any],
+    resolve_kit: _Any = _get_kit,
+) -> list[_SceneNode]:
     position = (float(payload["position"][0]), float(payload["position"][1]))
-    kit = _get_kit(str(payload["kit"]))
+    kit = resolve_kit(str(payload["kit"]))
     return _compile_kit_parts(
         name=name,
         kit=kit,
@@ -471,9 +525,13 @@ def _compile_landmark(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
     )
 
 
-def _compile_prop(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
+def _compile_prop(
+    name: str,
+    payload: dict[str, _Any],
+    resolve_kit: _Any = _get_kit,
+) -> list[_SceneNode]:
     position = (float(payload["position"][0]), float(payload["position"][1]))
-    kit = _get_kit(str(payload["kit"]))
+    kit = resolve_kit(str(payload["kit"]))
     scale = float(payload["scale"])
     yaw = _math.radians(float(payload["yaw_degrees"]))
     return _compile_kit_parts(
@@ -488,6 +546,7 @@ def _compile_prop(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
 
 def _extract_blockers(
     components: tuple[_Any, ...],
+    resolve_kit: _Any = _get_kit,
 ) -> tuple[
     list[_Polygon2D],
     list[tuple[_Point, _Point, float]],
@@ -514,7 +573,7 @@ def _extract_blockers(
             thickness = float(component.payload["thickness"])
             walls.append((start, end, thickness))
         elif discriminator == "prop":
-            kit = _get_kit(str(component.payload["kit"]))
+            kit = resolve_kit(str(component.payload["kit"]))
             if kit.blocking:
                 center = (
                     float(component.payload["position"][0]),
@@ -603,11 +662,12 @@ def _compile_scatter(
     walls: list[tuple[_Point, _Point, float]],
     prop_circles: list[tuple[_Point, float]],
     spawn: _Point | None,
+    resolve_kit: _Any = _get_kit,
 ) -> list[_SceneNode]:
     region = str(payload["region"])
     if region != ground_name:
         raise ValueError(f"unknown region: {region}")
-    kit = _get_kit(str(payload["kit"]))
+    kit = resolve_kit(str(payload["kit"]))
     count = int(payload["count"])
     min_spacing = float(payload["min_spacing"])
     yaw_jitter = bool(payload.get("yaw_jitter", False))
@@ -666,10 +726,162 @@ def _compile_spawn(name: str, payload: dict[str, _Any]) -> list[_SceneNode]:
     ]
 
 
+# Palette resolution: role keys win for whole components (ground, path,
+# water, landmark-category kits -> accent); remaining nodes recolor by
+# curated material name. Custom materials are never rewritten by a palette.
+_MATERIAL_TO_PALETTE_KEY: dict[str, str] = {
+    "grass": "vegetation",
+    "rock": "rock",
+    "stone": "structure",
+    "wood": "wood",
+    "snow": "snow",
+    "water": "water",
+}
+
+_ROLE_PALETTE_KEYS = frozenset({"ground", "path", "water", "accent"})
+
+
+def _component_palette_roles(
+    components: tuple[_Any, ...],
+    resolve_kit: _Any,
+) -> dict[str, str]:
+    """Map component semantic_id -> role palette key (ground/path/water/accent)."""
+
+    roles: dict[str, str] = {}
+    for component in components:
+        discriminator = component.payload.get("component")
+        if discriminator in {"ground", "path", "water"}:
+            roles[component.semantic_id] = str(discriminator)
+        elif discriminator == "landmark":
+            roles[component.semantic_id] = "accent"
+        elif discriminator == "prop":
+            kit = resolve_kit(str(component.payload["kit"]))
+            if kit.category == "landmark":
+                roles[component.semantic_id] = "accent"
+    return roles
+
+
+def _apply_palette(
+    nodes: list[_SceneNode],
+    palette: dict[str, str],
+    roles: dict[str, str],
+    custom_materials: dict[str, _MaterialSpec],
+) -> tuple[list[_SceneNode], dict[str, _MaterialSpec]]:
+    """Rewrite node visual materials to palette entries; return table adds."""
+
+    table: dict[str, _MaterialSpec] = {}
+    rewritten: list[_SceneNode] = []
+    for node in nodes:
+        visual = node.visual
+        if visual is None or getattr(visual, "material", None) is None:
+            rewritten.append(node)
+            continue
+        material_name = str(visual.material)
+        if material_name in custom_materials:
+            rewritten.append(node)
+            continue
+        owner = node.node_id.split(".", 1)[0]
+        role_key = roles.get(owner)
+        if role_key is not None:
+            key = role_key if role_key in palette else None
+        else:
+            mapped = _MATERIAL_TO_PALETTE_KEY.get(material_name)
+            key = mapped if mapped is not None and mapped in palette else None
+        if key is None:
+            rewritten.append(node)
+            continue
+        table_name = f"palette.{key}"
+        table[table_name] = _MaterialSpec(color=palette[key])
+        rewritten.append(
+            node.model_copy(
+                update={
+                    "visual": visual.model_copy(
+                        update={"material": table_name}
+                    )
+                }
+            )
+        )
+    return rewritten, table
+
+
+def model_kit_resolver(model: _EnvironmentModel) -> _Any:
+    """Return a kit resolver covering the catalog plus the model's custom kits."""
+
+    custom_kits = _parse_custom_kits(model.components)
+
+    def _resolve(kit_name: str) -> _Kit:
+        custom = custom_kits.get(kit_name)
+        if custom is not None:
+            return custom
+        return _get_kit(kit_name)
+
+    return _resolve
+
+
 def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
     """Compile a frozen environment model into an engine-facing candidate scene."""
 
     model = _EnvironmentModel.model_validate(model.model_dump())
+
+    custom_kits = _parse_custom_kits(model.components)
+
+    def _resolve_kit(kit_name: str) -> _Kit:
+        custom = custom_kits.get(kit_name)
+        if custom is not None:
+            return custom
+        return _get_kit(kit_name)
+
+    custom_materials: dict[str, _MaterialSpec] = {}
+    palette: dict[str, str] = {}
+    lighting: dict[str, _Any] = {}
+    for component in model.components:
+        payload = component.payload
+        discriminator = payload.get("component")
+        if discriminator == "material":
+            custom_materials[component.semantic_id] = _MaterialSpec(
+                color=str(payload["color"]),
+                emission_color=(
+                    str(payload["emission_color"])
+                    if "emission_color" in payload
+                    else None
+                ),
+                emission_strength=(
+                    float(payload["emission_strength"])
+                    if "emission_strength" in payload
+                    else None
+                ),
+                roughness=(
+                    float(payload["roughness"])
+                    if "roughness" in payload
+                    else None
+                ),
+                metallic=(
+                    float(payload["metallic"])
+                    if "metallic" in payload
+                    else None
+                ),
+            )
+        elif discriminator == "palette":
+            palette = {
+                key: str(value)
+                for key, value in payload.items()
+                if key != "component"
+            }
+        elif discriminator == "lighting":
+            lighting = {
+                key: value
+                for key, value in payload.items()
+                if key != "component"
+            }
+
+    known_materials = frozenset(custom_materials) | _CURATED_MATERIALS
+    for kit in custom_kits.values():
+        for part in kit.parts:
+            if part.material not in known_materials:
+                raise ValueError(
+                    f"unknown material: {part.material} "
+                    f"(custom kit '{kit.name}')"
+                )
 
     ground_footprint: _Polygon2D | None = None
     ground_name: str | None = None
@@ -701,7 +913,7 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
         raise ValueError("missing spawn component")
 
     blocker_polygons, walls, prop_circles, spawn_position = _extract_blockers(
-        model.components
+        model.components, _resolve_kit
     )
 
     nodes: list[_SceneNode] = []
@@ -723,11 +935,11 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
         elif discriminator == "obstacle":
             nodes.extend(_compile_obstacle(name, payload))
         elif discriminator == "structure":
-            nodes.extend(_compile_structure(name, payload))
+            nodes.extend(_compile_structure(name, payload, _resolve_kit))
         elif discriminator == "landmark":
-            nodes.extend(_compile_landmark(name, payload))
+            nodes.extend(_compile_landmark(name, payload, _resolve_kit))
         elif discriminator == "prop":
-            nodes.extend(_compile_prop(name, payload))
+            nodes.extend(_compile_prop(name, payload, _resolve_kit))
         elif discriminator == "scatter":
             nodes.extend(
                 _compile_scatter(
@@ -740,17 +952,47 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
                     walls=walls,
                     prop_circles=prop_circles,
                     spawn=spawn_position,
+                    resolve_kit=_resolve_kit,
                 )
             )
         elif discriminator == "spawn":
             nodes.extend(_compile_spawn(name, payload))
         elif discriminator == "camera":
             camera_size = float(payload["orthographic_size"])
+        elif discriminator in {"material", "palette", "lighting", "custom_kit"}:
+            pass  # visual-extension declarations produce no scene nodes
         else:
             raise ValueError(f"unknown component discriminator: {discriminator!r}")
 
     if camera_size is None:
         raise ValueError("missing camera component")
+
+    material_table: dict[str, _MaterialSpec] = dict(custom_materials)
+    if palette:
+        roles = _component_palette_roles(model.components, _resolve_kit)
+        nodes, palette_entries = _apply_palette(
+            nodes, palette, roles, custom_materials
+        )
+        material_table.update(palette_entries)
+
+    presentation_fields: dict[str, _Any] = {}
+    for palette_key, field in (
+        ("sky_top", "sky_top"),
+        ("sky_horizon", "sky_horizon"),
+        ("sun", "sun_color"),
+    ):
+        if palette_key in palette:
+            presentation_fields[field] = palette[palette_key]
+    for lighting_key in (
+        "ambient_color",
+        "ambient_energy",
+        "sun_color",
+        "sun_energy",
+        "sky_top",
+        "sky_horizon",
+    ):
+        if lighting_key in lighting:
+            presentation_fields[lighting_key] = lighting[lighting_key]
 
     scene = _GodotSceneSpec(
         nodes=tuple(nodes),
@@ -760,6 +1002,12 @@ def compile_environment_model(model: _EnvironmentModel) -> _CandidateScene:
             fade_occluders=True,
         ),
         controller_semantic_id=spawn_name,
+        materials=material_table or None,
+        presentation=(
+            _PresentationSpec(**presentation_fields)
+            if presentation_fields
+            else None
+        ),
     )
     manifest = _ArtifactManifest(root="artifacts", entries=())
     return _CandidateScene(scene=scene, manifest=manifest)

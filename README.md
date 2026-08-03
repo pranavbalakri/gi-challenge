@@ -2,9 +2,9 @@
 
 Hi! This is my submission to the challenge. EnvMaker turns a text prompt ("a stone courtyard with a banner at the east gate") into a playable, validated Godot world that an agent walks through.
 
-Environments render as organic 2D low-poly isometric scenes (think Hades-style camera).
+Environments render as organic 2D low-poly isometric scenes (like a Hades-style camera). 
 
-The authoring model writes a small Python program against an SDK containing parametric kits, 2D footprint geometry, and certain props. This method was inspired by by [Articraft](https://arxiv.org/html/2605.15187v1#S3), a harness for generating 3D models that used a similar SDK. 
+The authoring model writes a small Python program against an SDK containing parametric kits, 2D footprint geometry, and certain props. This method was inspired by [Articraft](https://arxiv.org/html/2605.15187v1#S3), a harness for generating 3D models that used a similar SDK. The agent can also theme the world by editing color palattes, generating custom materials, lighting, and other small primitive kits (`examples/alien/environment.py` is a sealed alien world built this way).
 
 Here is a small system diagram:
 
@@ -17,13 +17,12 @@ flowchart TD
     Model --> Compile["SDK compiler"]
     Compile --> Candidate["CandidateScene + ArtifactManifest"]
     Candidate --> Runner["Godot 4.7.1 (bridge)"]
-    Runner --> Validate["Hard validators (9 stages)"]
+    Runner --> Validate["Hard validators (9 stages, incl. live NavigationAgent3D traversal)"]
     Runner --> Render["Isometric + top-down renders"]
     Validate --> Feedback["Typed Signals: code, message, IDs, measurements, guidance"]
     Feedback -.repair.-> Agent
     Validate -->|"all pass"| Definition["Sealed EnvironmentDefinition"]
-    Definition --> Traverse["Automated traversal (NavigationAgent3D episode)"]
-    Traverse --> Evidence["EpisodeResult + renders + full trace"]
+    Definition --> Evidence["EpisodeResult + renders + full trace"]
 ```
 
 
@@ -32,7 +31,7 @@ flowchart TD
 
 ## Running it in Claude Code
 
-No API key and no manual setup. Clone the repo, start Claude Code at the repo root, and ask in plain English:
+Clone the repository, start Claude Code at the repo root (I use the terminal), and ask in plain English:
 
 > Use the envmaker harness to create an environment that consists of a green field with several scattered boulders.
 
@@ -59,4 +58,4 @@ uv run envmaker check
 uv run envmaker run "a frozen village with a walled square and a watchtower" --open
 ```
 
-Validation runs keep their Godot process minimized, so nothing pops onto your screen; a window only opens for `--view` and `--open`. Every run leaves `runs/<id>/` with the event trace (`runlog.jsonl`), each source revision, the renders, and, on acceptance, the sealed `environment-definition.json`. `uv run pytest -q` runs the full test suite. Evaluation results across six prompts (one-shot vs. repair loop): `[evals/mvp-report.md](evals/mvp-report.md)`.
+Validation runs keep their Godot process minimized, so nothing pops onto your screen; a window only opens for `--view` and `--open`. Every run leaves `runs/<id>/` with the event trace (`runlog.jsonl`), each source revision, the renders, and, on acceptance, the sealed `environment-definition.json`. `uv run pytest -q` runs the full test suite. Evaluation results across six prompts (one-shot vs. repair loop): [evals/mvp-report.md](evals/mvp-report.md).

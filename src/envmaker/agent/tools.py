@@ -31,7 +31,7 @@ from envmaker.core.signals import SignalSeverity as _SignalSeverity
 from envmaker.runlog import RunLog as _RunLog
 from envmaker.runlog import _redact as _redact_value
 from envmaker.sdk import SDK_VERSION as _SDK_VERSION
-from envmaker.sdk.kits import get_kit as _get_kit
+from envmaker.sdk.compile import model_kit_resolver as _model_kit_resolver
 from envmaker.validation import StaticValidation as _StaticValidation
 from envmaker.validation import validate_candidate as _validate_candidate
 from envmaker.validation import validate_static as _validate_static
@@ -487,10 +487,11 @@ def _aesthetics_probe(
             continue
         blocker_area += 4.0 * float(oriented["half_x"]) * float(oriented["half_z"])
 
+    resolve_kit = _model_kit_resolver(model)
     for component in model.components:
         if component.payload.get("component") != "prop":
             continue
-        kit = _get_kit(str(component.payload["kit"]))
+        kit = resolve_kit(str(component.payload["kit"]))
         if not kit.blocking:
             continue
         scale = float(component.payload["scale"])  # type: ignore[arg-type]
@@ -510,7 +511,7 @@ def _aesthetics_probe(
             target_id = f"{component.semantic_id}.0"
             break
         if discriminator == "prop":
-            kit = _get_kit(str(component.payload["kit"]))
+            kit = resolve_kit(str(component.payload["kit"]))
             if kit.category == "landmark":
                 target_id = f"{component.semantic_id}.0"
                 break
@@ -1043,16 +1044,19 @@ class ToolSurface:
             return result
         if self.context.probe is None:
             signal = _Signal(
-                code="v7.no_landmark",
+                code="v7.no_probe_target",
                 severity=_SignalSeverity.FAILURE,
-                message="navigation probe requires a declared landmark",
-                guidance="declare a landmark so navigation has a distinct goal",
+                message=(
+                    "no navigation target could be resolved (no landmark and "
+                    "no clear ground point beyond 1.5 m of spawn)"
+                ),
+                guidance="enlarge the open ground or declare a landmark",
             )
             result = NavigationResult(
                 ok=False,
                 stage_outcomes={_HardStage.CONTROLLER.value: False},
                 signals=(signal,),
-                reason="navigation probe requires a declared landmark",
+                reason="no navigation target could be resolved",
             )
             self._log("simulate_navigation", {}, result.model_dump())
             return result
@@ -1097,9 +1101,13 @@ class ToolSurface:
             path_length_m=path_length_m,
             reason="" if ok else "runtime validation failed",
         )
+        probe_label = self.context.probe.target_landmark_id
+        if probe_label is None and self.context.probe.target_position is not None:
+            position = self.context.probe.target_position
+            probe_label = f"synthetic:({position[0]:.1f}, {position[1]:.1f})"
         self._log(
             "simulate_navigation",
-            {"probe": self.context.probe.target_landmark_id},
+            {"probe": probe_label},
             {
                 "ok": result.ok,
                 "stages": result.stage_outcomes,

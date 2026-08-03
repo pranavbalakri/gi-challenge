@@ -55,6 +55,11 @@ _KNOWN_COMPONENTS = frozenset(
         "scatter",
         "spawn",
         "camera",
+        # Bounded visual-extension declarations (no scene nodes of their own).
+        "material",
+        "palette",
+        "lighting",
+        "custom_kit",
     }
 )
 _KIT_COMPONENTS = frozenset({"structure", "landmark", "prop", "scatter"})
@@ -290,6 +295,12 @@ def _check_semantic(model: _EnvironmentModel) -> _StageReport:
         if component.payload.get("component") == "ground"
     }
 
+    declared_kits = frozenset(
+        component.semantic_id
+        for component in model.components
+        if component.payload.get("component") == "custom_kit"
+    )
+
     for component in model.components:
         seen_ids.append(component.semantic_id)
         discriminator = component.payload.get("component")
@@ -326,14 +337,19 @@ def _check_semantic(model: _EnvironmentModel) -> _StageReport:
                 )
         if discriminator in _KIT_COMPONENTS:
             kit_name = component.payload.get("kit")
-            if not isinstance(kit_name, str) or kit_name not in _KITS:
+            if not isinstance(kit_name, str) or (
+                kit_name not in _KITS and kit_name not in declared_kits
+            ):
                 signals.append(
                     _failure(
                         "v3.unknown_kit",
                         "component references an unknown kit",
                         subject_ids=(component.semantic_id,),
                         measurements={"kit": str(kit_name)},
-                        guidance="choose a kit name from envmaker.sdk.KITS",
+                        guidance=(
+                            "choose a kit from envmaker.sdk.KITS or declare "
+                            "it first with custom_kit(...)"
+                        ),
                     )
                 )
 

@@ -39,6 +39,7 @@ func _run_all() -> void:
 	_test_decoder_length_surface()
 	_test_artifact_loader()
 	_test_materializer()
+	_test_visual_extensions()
 	_test_organic_visuals()
 	_test_sky_and_backdrop()
 	_test_organic_kits()
@@ -602,6 +603,123 @@ func _test_materializer() -> void:
 	root.free()
 
 
+func _test_visual_extensions() -> void:
+	var candidate := {
+		"scene": {
+			"nodes": [
+				_scene_node_dict(
+					"terrain",
+					Vector3(0.0, 0.0, 0.0),
+					{
+						"shape": "box",
+						"dimensions": {"x": 20.0, "y": 0.5, "z": 20.0},
+					},
+					true,
+					{
+						"shape": "plane",
+						"size_x": 20.0,
+						"size_z": 20.0,
+						"material": "palette.ground",
+					},
+				),
+				_scene_node_dict(
+					"crystal",
+					Vector3(2.0, 0.9, 2.0),
+					null,
+					false,
+					{
+						"shape": "cylinder",
+						"radius": 0.45,
+						"top_radius": 0.0,
+						"height": 1.8,
+						"material": "violet_crystal",
+					},
+				),
+			],
+			"camera": {
+				"follow_semantic_id": "terrain",
+				"orthographic_size": 12.0,
+				"fade_occluders": true,
+			},
+			"controller_semantic_id": "terrain",
+			"materials": {
+				"palette.ground": {"color": "#6a4ba3"},
+				"violet_crystal": {
+					"color": "#a36cff",
+					"emission_color": "#7b3dff",
+					"emission_strength": 1.2,
+					"roughness": 0.25,
+					"metallic": 0.15,
+				},
+			},
+			"presentation": {
+				"sky_top": "#180e32",
+				"sky_horizon": "#593b82",
+				"sun_color": "#c5a6ff",
+				"sun_energy": 0.45,
+				"ambient_color": "#443b62",
+				"ambient_energy": 0.9,
+			},
+		},
+		"manifest": {"root": "artifacts", "entries": []},
+	}
+	var result: Dictionary = Materializer.materialize(candidate, get_root())
+	var root: Node3D = null
+	if result.get("ok", false):
+		root = result["root"]
+	check(result.get("ok", false) and root != null, "visual extensions materialize")
+	if root == null:
+		return
+
+	var terrain := root.get_node_or_null("terrain")
+	var terrain_material: StandardMaterial3D = null
+	if terrain != null and terrain.get_node_or_null("visual") != null:
+		terrain_material = terrain.get_node("visual").material_override
+	check(
+		terrain_material != null
+		and terrain_material.albedo_color.is_equal_approx(Color.html("#6a4ba3")),
+		"material table drives albedo over curated fallback",
+	)
+
+	var crystal := root.get_node_or_null("crystal")
+	var crystal_material: StandardMaterial3D = null
+	if crystal != null and crystal.get_node_or_null("visual") != null:
+		crystal_material = crystal.get_node("visual").material_override
+	check(
+		crystal_material != null
+		and crystal_material.emission_enabled
+		and crystal_material.emission.is_equal_approx(Color.html("#7b3dff"))
+		and absf(crystal_material.emission_energy_multiplier - 1.2) < 0.001
+		and absf(crystal_material.roughness - 0.25) < 0.001
+		and absf(crystal_material.metallic - 0.15) < 0.001,
+		"custom material emission, roughness, metallic applied",
+	)
+
+	var sun := root.get_node_or_null("sun") as DirectionalLight3D
+	check(
+		sun != null
+		and absf(sun.light_energy - 0.45) < 0.001
+		and sun.light_color.is_equal_approx(Color.html("#c5a6ff")),
+		"presentation overrides sun color and energy",
+	)
+
+	var world_environment := root.get_node_or_null("environment") as WorldEnvironment
+	var environment_ok := false
+	if world_environment != null and world_environment.environment != null:
+		var environment_resource := world_environment.environment
+		var sky_material := environment_resource.sky.sky_material as ProceduralSkyMaterial
+		environment_ok = (
+			environment_resource.ambient_light_color.is_equal_approx(Color.html("#443b62"))
+			and absf(environment_resource.ambient_light_energy - 0.9) < 0.001
+			and sky_material.sky_top_color.is_equal_approx(Color.html("#180e32"))
+			and sky_material.sky_horizon_color.is_equal_approx(Color.html("#593b82"))
+		)
+	check(environment_ok, "presentation overrides ambient and sky colors")
+
+	root.get_parent().remove_child(root)
+	root.free()
+
+
 func _test_organic_visuals() -> void:
 	var candidate := {
 		"scene": {
@@ -1100,6 +1218,21 @@ func _test_navigation_runtime() -> void:
 		wander_position.distance_to(wander_start) > 0.5
 		and wander_position.distance_to(closest) < 1.5,
 		"wander moves the agent and stays on the navmesh",
+	)
+
+	# Stuck recovery: an unreachable target (straight off the west mesh edge)
+	# must not pin the agent grinding at the boundary — navigation finishes at
+	# the clamped path end and the watchdog picks a fresh target.
+	agent_body.global_position = Vector3(-15.0, 1.5, 0.0)
+	agent_body.start_wander(4.0)
+	agent_body._set_wander_target(Vector3(-200.0, 0.0, 0.0))
+	var retargets_before: int = agent_body.wander_retargets()
+	for i: int in range(240):
+		await physics_frame
+	agent_body.stop_wander()
+	check(
+		agent_body.wander_retargets() > retargets_before,
+		"wander recovers from an unreachable target",
 	)
 
 	get_root().remove_child(stage)

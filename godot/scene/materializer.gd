@@ -34,6 +34,16 @@ static func materialize(candidate: Dictionary, parent: Node) -> Dictionary:
 		return {"ok": false, "error": "invalid candidate"}
 	var nodes: Array = nodes_value
 
+	# Optional visual-extension tables (absent for legacy candidates).
+	var materials: Dictionary = {}
+	var materials_value: Variant = scene.get("materials", null)
+	if typeof(materials_value) == TYPE_DICTIONARY:
+		materials = materials_value
+	var presentation: Dictionary = {}
+	var presentation_value: Variant = scene.get("presentation", null)
+	if typeof(presentation_value) == TYPE_DICTIONARY:
+		presentation = presentation_value
+
 	var root := Node3D.new()
 	root.name = "materialized"
 	var body_count := 0
@@ -44,7 +54,7 @@ static func materialize(candidate: Dictionary, parent: Node) -> Dictionary:
 			root.free()
 			return {"ok": false, "error": "invalid node: missing node_id"}
 		var node: Dictionary = node_value
-		var node_result: Dictionary = _build_node(node)
+		var node_result: Dictionary = _build_node(node, materials)
 		if not node_result.get("ok", false):
 			root.free()
 			return {"ok": false, "error": node_result.get("error", "")}
@@ -77,16 +87,20 @@ static func materialize(candidate: Dictionary, parent: Node) -> Dictionary:
 			continue
 		ground_size = size
 		ground_material_name = str(visual.get("material", "default"))
-		ground_color = MATERIAL_COLORS.get(
-			ground_material_name,
-			MATERIAL_COLORS["default"],
-		)
+		ground_color = _resolve_color(ground_material_name, materials)
 		var transform_result: Dictionary = _parse_transform(node.get("transform"))
 		if transform_result.get("ok", false):
 			var ground_transform: Transform3D = transform_result["transform"]
 			ground_origin = ground_transform.origin
 
 	var palette: Dictionary = _sky_palette(ground_material_name)
+	# Environment-declared presentation overrides the derived defaults.
+	if presentation.has("sky_top"):
+		palette["sky_top"] = Color.html(str(presentation["sky_top"]))
+	if presentation.has("sky_horizon"):
+		palette["sky_horizon"] = Color.html(str(presentation["sky_horizon"]))
+	if presentation.has("sun_color"):
+		palette["sun"] = Color.html(str(presentation["sun_color"]))
 
 	if ground_size != Vector2.ZERO:
 		# Surrounding terrain margin: kills the floating-board look without
@@ -108,6 +122,8 @@ static func materialize(candidate: Dictionary, parent: Node) -> Dictionary:
 	sun.name = "sun"
 	sun.rotation_degrees = Vector3(-65.0, -30.0, 0.0)
 	sun.light_energy = 0.55
+	if presentation.has("sun_energy") and _is_number(presentation["sun_energy"]):
+		sun.light_energy = clampf(float(presentation["sun_energy"]), 0.0, 2.0)
 	sun.light_color = palette["sun"]
 	sun.shadow_enabled = true
 	root.add_child(sun)
@@ -126,6 +142,17 @@ static func materialize(candidate: Dictionary, parent: Node) -> Dictionary:
 	environment_resource.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment_resource.ambient_light_color = Color(0.74, 0.76, 0.78)
 	environment_resource.ambient_light_energy = 1.2
+	if presentation.has("ambient_color"):
+		environment_resource.ambient_light_color = Color.html(
+			str(presentation["ambient_color"])
+		)
+	if (
+		presentation.has("ambient_energy")
+		and _is_number(presentation["ambient_energy"])
+	):
+		environment_resource.ambient_light_energy = clampf(
+			float(presentation["ambient_energy"]), 0.0, 2.0
+		)
 	environment_resource.background_mode = Environment.BG_SKY
 	environment_resource.sky = sky
 	var world_environment := WorldEnvironment.new()
@@ -225,7 +252,17 @@ static func _lcg_unit(state: int) -> float:
 	return float(posmod(state, 10000)) / 10000.0
 
 
-static func _build_node(node: Dictionary) -> Dictionary:
+static func _resolve_color(material_name: String, materials: Dictionary) -> Color:
+	var entry_value: Variant = materials.get(material_name, null)
+	if typeof(entry_value) == TYPE_DICTIONARY:
+		var entry: Dictionary = entry_value
+		var color_value: Variant = entry.get("color", null)
+		if typeof(color_value) == TYPE_STRING:
+			return Color.html(str(color_value))
+	return MATERIAL_COLORS.get(material_name, MATERIAL_COLORS["default"])
+
+
+static func _build_node(node: Dictionary, materials: Dictionary = {}) -> Dictionary:
 	var node_id := str(node.get("node_id", ""))
 	if node_id.is_empty():
 		return {"ok": false, "error": "invalid node: missing node_id"}
@@ -262,7 +299,7 @@ static func _build_node(node: Dictionary) -> Dictionary:
 	var visual_value: Variant = node.get("visual", null)
 	if typeof(visual_value) == TYPE_DICTIONARY:
 		var visual: Dictionary = visual_value
-		var visual_result: Dictionary = _build_visual(visual)
+		var visual_result: Dictionary = _build_visual(visual, materials)
 		if not visual_result.get("ok", false):
 			container.free()
 			return {"ok": false, "error": visual_result.get("error", "")}
@@ -333,7 +370,7 @@ static func _build_collider_shape(collider: Dictionary) -> Dictionary:
 			}
 
 
-static func _build_visual(visual: Dictionary) -> Dictionary:
+static func _build_visual(visual: Dictionary, materials: Dictionary = {}) -> Dictionary:
 	var shape_name := str(visual.get("shape", ""))
 	var mesh: Mesh
 	match shape_name:
@@ -405,11 +442,22 @@ static func _build_visual(visual: Dictionary) -> Dictionary:
 
 	var material := StandardMaterial3D.new()
 	var material_name := str(visual.get("material", "default"))
-	var albedo_color: Color = MATERIAL_COLORS.get(
-		material_name,
-		MATERIAL_COLORS["default"],
-	)
-	material.albedo_color = albedo_color
+	material.albedo_color = _resolve_color(material_name, materials)
+	# Bounded custom-material extras: emission, roughness, metallic only.
+	var entry_value: Variant = materials.get(material_name, null)
+	if typeof(entry_value) == TYPE_DICTIONARY:
+		var entry: Dictionary = entry_value
+		if typeof(entry.get("emission_color", null)) == TYPE_STRING:
+			material.emission_enabled = true
+			material.emission = Color.html(str(entry["emission_color"]))
+			if _is_number(entry.get("emission_strength", null)):
+				material.emission_energy_multiplier = clampf(
+					float(entry["emission_strength"]), 0.0, 4.0
+				)
+		if _is_number(entry.get("roughness", null)):
+			material.roughness = clampf(float(entry["roughness"]), 0.0, 1.0)
+		if _is_number(entry.get("metallic", null)):
+			material.metallic = clampf(float(entry["metallic"]), 0.0, 1.0)
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "visual"
 	mesh_instance.mesh = mesh

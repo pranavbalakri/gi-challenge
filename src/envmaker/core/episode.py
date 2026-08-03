@@ -40,11 +40,27 @@ class TerminalReason(_StrEnum):
 
 
 class NavigationProbe(_BaseModel):
-    """A bounded evaluator-owned navigation episode specification."""
+    """A bounded evaluator-owned navigation episode specification.
+
+    Exactly one target form: ``target_landmark_id`` (a compiled scene node)
+    or ``target_position`` (a synthesized XZ point — used when the
+    environment declares no landmark; the harness aims at the farthest
+    clear-ground point from spawn so traversal evidence survives without
+    an authored goal). Both omit from canonical JSON when None, keeping
+    legacy landmark probes byte-identical.
+    """
 
     model_config = _ConfigDict(frozen=True, extra="forbid")
 
-    target_landmark_id: str = _Field(pattern=_SEMANTIC_ID_PATTERN)
+    target_landmark_id: str | None = _Field(
+        default=None,
+        pattern=_SEMANTIC_ID_PATTERN,
+        json_schema_extra={"omit_when_none": True},
+    )
+    target_position: tuple[float, float] | None = _Field(
+        default=None,
+        json_schema_extra={"omit_when_none": True},
+    )
     success_radius_m: float = _Field(
         gt=0,
         allow_inf_nan=False,
@@ -82,6 +98,19 @@ class NavigationProbe(_BaseModel):
 
     @_model_validator(mode="after")
     def _validate_and_fingerprint(self) -> NavigationProbe:
+        if (self.target_landmark_id is None) == (self.target_position is None):
+            raise ValueError(
+                "exactly one of target_landmark_id or target_position "
+                "must be set"
+            )
+        if self.target_position is not None:
+            import math as _math
+
+            if any(
+                not _math.isfinite(value) for value in self.target_position
+            ):
+                raise ValueError("target_position must be finite")
+
         required_reasons = {TerminalReason.ARRIVED, TerminalReason.TIMEOUT}
         if not required_reasons.issubset(self.terminal_reasons):
             raise ValueError(
@@ -100,17 +129,20 @@ class NavigationProbe(_BaseModel):
         if self.stuck_timeout_ticks >= self.max_ticks:
             raise ValueError("stuck timeout must be below max_ticks")
 
-        fingerprint = _canonical_fingerprint(
-            {
-                "target_landmark_id": self.target_landmark_id,
-                "success_radius_m": self.success_radius_m,
-                "max_ticks": self.max_ticks,
-                "action_repeat": self.action_repeat,
-                "allowed_connector_types": self.allowed_connector_types,
-                "stuck_timeout_ticks": self.stuck_timeout_ticks,
-                "terminal_reasons": self.terminal_reasons,
-            }
-        )
+        fingerprint_fields: dict[str, object] = {
+            "target_landmark_id": self.target_landmark_id,
+            "success_radius_m": self.success_radius_m,
+            "max_ticks": self.max_ticks,
+            "action_repeat": self.action_repeat,
+            "allowed_connector_types": self.allowed_connector_types,
+            "stuck_timeout_ticks": self.stuck_timeout_ticks,
+            "terminal_reasons": self.terminal_reasons,
+        }
+        # Included only when set so legacy landmark-probe fingerprints
+        # remain byte-identical.
+        if self.target_position is not None:
+            fingerprint_fields["target_position"] = self.target_position
+        fingerprint = _canonical_fingerprint(fingerprint_fields)
         if self.probe_fingerprint == "":
             return self.model_copy(update={"probe_fingerprint": fingerprint})
         if self.probe_fingerprint != fingerprint:

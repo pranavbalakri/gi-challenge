@@ -440,7 +440,11 @@ def test_probe_targets_first_landmark_despite_earlier_scatter(
     assert ctx.probe.target_landmark_id == "goal_obelisk.0"
 
 
-def test_simulate_no_landmark_returns_typed_v7_failure(tmp_path: Path) -> None:
+def test_no_landmark_synthesizes_farthest_point_probe(tmp_path: Path) -> None:
+    """Goals are validation instrumentation: landmark-free worlds still probe."""
+
+    import math
+
     from envmaker.agent.loop import _ensure_probe
     from envmaker.agent.tools import ToolContext
     from envmaker.runlog import RunLog
@@ -453,31 +457,63 @@ def test_simulate_no_landmark_returns_typed_v7_failure(tmp_path: Path) -> None:
         footprint=Polygon2D([(-12, -12), (12, -12), (12, 12), (-12, 12)]),
         material="grass",
     )
+    builder.obstacle(
+        "rock",
+        footprint=Polygon2D([(8, 8), (11, 8), (11, 11), (8, 11)]),
+        height=1.0,
+        material="rock",
+    )
     builder.spawn("hero", position=(-6.0, -6.0))
     builder.camera(orthographic_size=16.0)
     model = builder.freeze()
     static = validate_model(model)
     assert static.candidate is not None
-    driver = _RepairStubDriver()
     ctx = ToolContext(
         source="pass\n",
         limits=_LIMITS,
         run_dir=tmp_path,
         runlog=RunLog(tmp_path / "r.jsonl"),
-        driver=driver,
+        driver=_RepairStubDriver(),
         static=static,
     )
     _ensure_probe(ctx)
-    assert ctx.probe is None
-    result = ToolSurface(ctx).simulate_navigation()
-    assert result.ok is False
-    assert "harness_error" not in result.reason
-    codes = {signal.code for signal in result.signals}
-    assert "v7.no_landmark" in codes
-    guidance = next(
-        signal.guidance for signal in result.signals if signal.code == "v7.no_landmark"
+    probe = ctx.probe
+    assert probe is not None
+    assert probe.target_landmark_id is None
+    assert probe.target_position is not None
+    x, z = probe.target_position
+    # Inside the ground with margin, non-trivially far from spawn, and clear
+    # of the blocker (agent-radius inflated).
+    assert -12.0 < x < 12.0 and -12.0 < z < 12.0
+    assert math.hypot(x - (-6.0), z - (-6.0)) > 10.0
+    assert not (7.5 <= x <= 11.5 and 7.5 <= z <= 11.5)
+
+
+def test_probe_target_forms_are_exclusive_and_fingerprint_stable() -> None:
+    from envmaker.core.artifacts import canonical_json
+    from envmaker.core.episode import NavigationProbe, TerminalReason
+
+    common = dict(
+        success_radius_m=1.5,
+        max_ticks=2400,
+        action_repeat=1,
+        allowed_connector_types=(),
+        stuck_timeout_ticks=180,
+        terminal_reasons=(TerminalReason.ARRIVED, TerminalReason.TIMEOUT),
     )
-    assert "declare a landmark so navigation has a distinct goal" in guidance
+    legacy = NavigationProbe(target_landmark_id="goal.0", **common)
+    assert '"target_position"' not in canonical_json(legacy)
+
+    synthetic = NavigationProbe(target_position=(4.0, -7.5), **common)
+    assert synthetic.target_landmark_id is None
+    assert legacy.probe_fingerprint != synthetic.probe_fingerprint
+
+    with pytest.raises(Exception, match="exactly one"):
+        NavigationProbe(**common)
+    with pytest.raises(Exception, match="exactly one"):
+        NavigationProbe(
+            target_landmark_id="goal.0", target_position=(1.0, 1.0), **common
+        )
 
 
 def test_persistence_failure_downgrades_to_harness_error(

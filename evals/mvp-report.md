@@ -45,8 +45,8 @@ Provider/harness errors are reported separately from hard-validation failures (0
 ## Limitations
 
 - Sample size: six prompts, one seed, two variants; rates are directional evidence for the loop-vs-oneshot comparison, not statistics.
-- Base model: the default is weak (`gpt-4o-mini`) and acceptance is sensitive to harness affordances (nudges); the frozen same-model comparison is what the claim rests on.
-- Budgets: 8 provider turns / 600 s wall per run; runs one repair short of acceptance count as rejected, and budgets are never extended.
+- Base model: `gpt-5.4-mini` for both variants; acceptance is sensitive to harness affordances (nudges); the frozen same-model comparison is what the claim rests on.
+- Budgets: 16 provider turns / 600 s wall per run; runs one repair short of acceptance count as rejected, and budgets are never extended.
 - Strict baseline: the one-shot variant gets the identical prompt but no tool execution and no feedback; the measured gap is the value of typed feedback, not prompt engineering.
 - Loop stage attribution derives from observed compile events in the runlog; a run that never re-compiled reports its last known stages.
-- Prompt compliance is human-scored via the YAML checklists, not a hard validator stage; runtime scope is a single walkable plane with box/cylinder primitives, verified on macOS arm64.
+- Prompt compliance is human-scored via the YAML checklists, not a hard validator stage; runtime scope is a single walkable plane with primitive geometry (boxes, cylinders, spheres, cones, spline ribbons), verified on macOS arm64.

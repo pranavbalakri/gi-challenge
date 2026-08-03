@@ -782,6 +782,10 @@ func _respond_render(body: Dictionary) -> void:
 	)
 
 
+func _is_number(value: Variant) -> bool:
+	return typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT
+
+
 func _respond_probe(body: Dictionary) -> void:
 	if not _candidate_loaded:
 		_send_error(body, "bridge.no_candidate", "No candidate is loaded.")
@@ -795,14 +799,22 @@ func _respond_probe(body: Dictionary) -> void:
 		return
 	var payload: Dictionary = body["payload"]
 	var landmark_value: Variant = payload.get("target_landmark_id")
+	var position_value: Variant = payload.get("target_position")
 	var radius_value: Variant = payload.get("success_radius_m")
 	var max_ticks_value: Variant = _integer_at_least(payload.get("max_ticks"), 1)
 	var stuck_value: Variant = _integer_at_least(
 		payload.get("stuck_timeout_ticks"), 1
 	)
 	var fingerprint_value: Variant = payload.get("probe_fingerprint")
+	var has_landmark := typeof(landmark_value) == TYPE_STRING
+	var has_position := (
+		typeof(position_value) == TYPE_ARRAY
+		and (position_value as Array).size() == 2
+		and _is_number((position_value as Array)[0])
+		and _is_number((position_value as Array)[1])
+	)
 	if (
-		typeof(landmark_value) != TYPE_STRING
+		(has_landmark == has_position)
 		or (
 			typeof(radius_value) != TYPE_FLOAT
 			and typeof(radius_value) != TYPE_INT
@@ -813,17 +825,23 @@ func _respond_probe(body: Dictionary) -> void:
 	):
 		_send_error(body, "bridge.invalid_probe", "invalid probe payload")
 		return
-	var target_value: Variant = _find_node_origin(
-		_candidate, str(landmark_value)
-	)
-	if target_value == null:
-		_send_error(
-			body,
-			"bridge.unknown_landmark",
-			"target landmark not in scene",
+	var target: Vector3
+	if has_landmark:
+		var target_value: Variant = _find_node_origin(
+			_candidate, str(landmark_value)
 		)
-		return
-	var target: Vector3 = target_value
+		if target_value == null:
+			_send_error(
+				body,
+				"bridge.unknown_landmark",
+				"target landmark not in scene",
+			)
+			return
+		target = target_value
+	else:
+		# Synthesized goal-free probe: farthest clear-ground XZ point.
+		var position: Array = position_value
+		target = Vector3(float(position[0]), 0.0, float(position[1]))
 	_agent.stop_wander()
 	var episode: Dictionary = await _agent.run_episode(
 		target,

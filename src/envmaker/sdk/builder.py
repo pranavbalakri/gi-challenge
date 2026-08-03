@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence as _Sequence
 import math as _math
 import re as _re
+from typing import Any as _Any
 
 from envmaker.core.model import ComponentKind as _ComponentKind
 from envmaker.core.model import EnvironmentModel as _EnvironmentModel
@@ -14,9 +15,14 @@ from envmaker.sdk.footprints import polygon_area as _polygon_area
 from envmaker.sdk.footprints import polygon_bounds as _polygon_bounds
 from envmaker.sdk.footprints import polygon_contains as _polygon_contains
 from envmaker.sdk.kits import CURATED_MATERIALS as _CURATED_MATERIALS
+from envmaker.sdk.kits import Kit as _Kit
+from envmaker.sdk.kits import KITS as _KITS
+from envmaker.sdk.kits import MATERIAL_NAME_PATTERN as _MATERIAL_NAME_PATTERN
+from envmaker.sdk.kits import MAX_CUSTOM_KIT_PARTS as _MAX_CUSTOM_KIT_PARTS
+from envmaker.sdk.kits import MAX_CUSTOM_KITS as _MAX_CUSTOM_KITS
 from envmaker.sdk.kits import get_kit as _get_kit
 
-__all__ = ["SDK_VERSION", "EnvironmentBuilder"]
+__all__ = ["PALETTE_KEYS", "SDK_VERSION", "EnvironmentBuilder"]
 
 SDK_VERSION: str = "0.1.0"
 
@@ -24,6 +30,52 @@ _NAME_PATTERN = _re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _Point = tuple[float, float]
 _MAX_MAGNITUDE = 10000.0
 _SPAWN_MARGIN = 0.4
+
+_HEX_COLOR_INPUT = _re.compile(r"^#?([0-9a-fA-F]{6})$")
+_MAX_CUSTOM_MATERIALS = 16
+_MAX_EMISSION_STRENGTH = 4.0
+
+PALETTE_KEYS: frozenset[str] = frozenset(
+    {
+        "ground",
+        "path",
+        "vegetation",
+        "rock",
+        "wood",
+        "water",
+        "snow",
+        "structure",
+        "accent",
+        "sky_top",
+        "sky_horizon",
+        "sun",
+    }
+)
+
+
+def _parse_color(value: object, label: str) -> str:
+    """Normalize a color to canonical lowercase '#rrggbb' (no alpha)."""
+
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a '#RRGGBB' hex string")
+    match = _HEX_COLOR_INPUT.fullmatch(value.strip())
+    if match is None:
+        raise ValueError(
+            f"{label} must be a '#RRGGBB' hex string (no alpha): {value!r}"
+        )
+    return "#" + match.group(1).lower()
+
+
+def _require_unit(value: float, label: str) -> float:
+    number = _require_finite(value, label)
+    if number < 0.0 or number > 1.0:
+        raise ValueError(f"{label} must be between 0.0 and 1.0")
+    return number
+
+
+def _clamp(value: float, label: str, low: float, high: float) -> float:
+    number = _require_finite(value, label)
+    return min(max(number, low), high)
 
 
 def _require_finite(value: float, label: str) -> float:
@@ -46,9 +98,16 @@ def _require_point(point: _Point, label: str) -> _Point:
     )
 
 
-def _require_material(material: str) -> str:
-    if material not in _CURATED_MATERIALS:
-        raise ValueError(f"unknown material: {material}")
+def _require_material(
+    material: str,
+    custom_materials: frozenset[str] | set[str] = frozenset(),
+) -> str:
+    if material not in _CURATED_MATERIALS and material not in custom_materials:
+        raise ValueError(
+            f"unknown material: {material} — use a curated material "
+            f"({', '.join(sorted(_CURATED_MATERIALS))}) or declare it "
+            "first with material(...)"
+        )
     return material
 
 
@@ -145,6 +204,7 @@ def _require_scale_range(
 def _spawn_blocker_hit(
     spawn: _Point,
     components: _Sequence[_SemanticComponent],
+    kit_resolver: _Any = None,
 ) -> str | None:
     """Return a located description of the blocker the spawn intersects.
 
@@ -189,7 +249,8 @@ def _spawn_blocker_hit(
                 )
         elif discriminator == "prop":
             kit_name = str(component.payload["kit"])
-            kit_obj = _get_kit(kit_name)
+            resolve = kit_resolver if kit_resolver is not None else _get_kit
+            kit_obj = resolve(kit_name)
             if not kit_obj.blocking:
                 continue
             center = (
@@ -234,7 +295,17 @@ class EnvironmentBuilder:
         self._has_ground = False
         self._has_spawn = False
         self._has_camera = False
+        self._has_palette = False
+        self._has_lighting = False
         self._spawn_position: _Point | None = None
+        self._custom_materials: set[str] = set()
+        self._custom_kits: dict[str, _Kit] = {}
+
+    def _resolve_kit(self, name: str) -> _Kit:
+        custom = self._custom_kits.get(name)
+        if custom is not None:
+            return custom
+        return _get_kit(name)
 
     def _ensure_mutable(self) -> None:
         if self._frozen:
@@ -287,7 +358,7 @@ class EnvironmentBuilder:
         bounds_area = (max_x - min_x) * (max_z - min_z)
         if abs(_polygon_area(footprint) - bounds_area) >= 1e-9:
             raise ValueError("ground footprint must be an axis-aligned rectangle")
-        material = _require_material(material)
+        material = _require_material(material, self._custom_materials)
         semantic_id = self._claim_name(name)
         self._has_ground = True
         self._ground_name = semantic_id
@@ -313,7 +384,7 @@ class EnvironmentBuilder:
         """Declare a visual-only path ribbon."""
 
         self._ensure_mutable()
-        material = _require_material(material)
+        material = _require_material(material, self._custom_materials)
         width = _require_finite(width, "width")
         if width <= 0.0:
             raise ValueError("width must be positive")
@@ -366,7 +437,7 @@ class EnvironmentBuilder:
         """Declare a blocking wall segment."""
 
         self._ensure_mutable()
-        material = _require_material(material)
+        material = _require_material(material, self._custom_materials)
         start_point = _require_point(start, "start")
         end_point = _require_point(end, "end")
         if start_point == end_point:
@@ -403,7 +474,7 @@ class EnvironmentBuilder:
 
         self._ensure_mutable()
         footprint = _require_footprint(footprint)
-        material = _require_material(material)
+        material = _require_material(material, self._custom_materials)
         height = _require_finite(height, "height")
         if height <= 0.0:
             raise ValueError("height must be positive")
@@ -434,7 +505,7 @@ class EnvironmentBuilder:
         height = _require_finite(height, "height")
         if height <= 0.0:
             raise ValueError("height must be positive")
-        kit_obj = _get_kit(kit)
+        kit_obj = self._resolve_kit(kit)
         if kit_obj.category != "structure":
             raise ValueError(f"kit category must be structure: {kit}")
         semantic_id = self._claim_name(name)
@@ -460,7 +531,7 @@ class EnvironmentBuilder:
 
         self._ensure_mutable()
         position_point = _require_point(position, "position")
-        kit_obj = _get_kit(kit)
+        kit_obj = self._resolve_kit(kit)
         if kit_obj.category != "landmark":
             raise ValueError(f"kit category must be landmark: {kit}")
         semantic_id = self._claim_name(name)
@@ -489,7 +560,7 @@ class EnvironmentBuilder:
         position_point = _require_point(position, "position")
         yaw = _normalize_yaw_degrees(_require_finite(yaw, "yaw"))
         scale = _require_scale(scale)
-        kit_obj = _get_kit(kit)
+        kit_obj = self._resolve_kit(kit)
         if kit_obj.category == "structure":
             raise ValueError(
                 f"kit category must be landmark or vegetation (got structure); "
@@ -549,7 +620,7 @@ class EnvironmentBuilder:
         validated_range: tuple[float, float] | None = None
         if scale_range is not None:
             validated_range = _require_scale_range(scale_range)
-        kit_obj = _get_kit(kit)
+        kit_obj = self._resolve_kit(kit)
         if kit_obj.category != "vegetation":
             raise ValueError(f"kit category must be vegetation: {kit}")
         semantic_id = self._claim_name(name)
@@ -586,6 +657,211 @@ class EnvironmentBuilder:
             {
                 "component": "spawn",
                 "position": [position_point[0], position_point[1]],
+            },
+        )
+
+    def material(
+        self,
+        name: str,
+        *,
+        color: str,
+        emission_color: str | None = None,
+        emission_strength: float | None = None,
+        roughness: float | None = None,
+        metallic: float | None = None,
+    ) -> EnvironmentBuilder:
+        """Declare a bounded custom material (max 16 per environment).
+
+        Colors are '#RRGGBB' hex (no alpha/transparency). Emission strength
+        is limited to 0..4; roughness/metallic to 0..1. No shaders, textures,
+        or arbitrary engine properties. Declare materials BEFORE using them.
+        """
+
+        self._ensure_mutable()
+        if _MATERIAL_NAME_PATTERN.fullmatch(name) is None:
+            raise ValueError(f"invalid material name: {name}")
+        if name in _CURATED_MATERIALS:
+            raise ValueError(f"material name shadows a curated material: {name}")
+        if name in self._custom_materials:
+            raise ValueError(f"duplicate material: {name}")
+        if len(self._custom_materials) >= _MAX_CUSTOM_MATERIALS:
+            raise ValueError(
+                f"at most {_MAX_CUSTOM_MATERIALS} custom materials per environment"
+            )
+        payload: dict[str, object] = {
+            "component": "material",
+            "color": _parse_color(color, "color"),
+        }
+        if emission_strength is not None and emission_color is None:
+            raise ValueError("emission_strength requires emission_color")
+        if emission_color is not None:
+            payload["emission_color"] = _parse_color(
+                emission_color, "emission_color"
+            )
+            strength = 1.0 if emission_strength is None else emission_strength
+            strength = _require_finite(strength, "emission_strength")
+            if strength < 0.0 or strength > _MAX_EMISSION_STRENGTH:
+                raise ValueError(
+                    "emission_strength must be between 0.0 and "
+                    f"{_MAX_EMISSION_STRENGTH:g}"
+                )
+            payload["emission_strength"] = strength
+        if roughness is not None:
+            payload["roughness"] = _require_unit(roughness, "roughness")
+        if metallic is not None:
+            payload["metallic"] = _require_unit(metallic, "metallic")
+        semantic_id = self._claim_name(name)
+        self._custom_materials.add(name)
+        return self._append(semantic_id, _ComponentKind.PRESENTATION, payload)
+
+    def palette(self, **colors: str) -> EnvironmentBuilder:
+        """Override the colors of semantic material categories (visuals only).
+
+        Supported keys: ground, path, vegetation, rock, wood, water, snow,
+        structure, accent (landmark kits), sky_top, sky_horizon, sun.
+        Colliders and navigation are untouched; omitted keys keep defaults.
+        """
+
+        self._ensure_mutable()
+        if self._has_palette:
+            raise ValueError("palette already declared")
+        if not colors:
+            raise ValueError("palette requires at least one key")
+        unknown = sorted(set(colors) - PALETTE_KEYS)
+        if unknown:
+            raise ValueError(
+                f"unknown palette keys: {', '.join(unknown)} "
+                f"(supported: {', '.join(sorted(PALETTE_KEYS))})"
+            )
+        payload: dict[str, object] = {"component": "palette"}
+        for key in sorted(colors):
+            payload[key] = _parse_color(colors[key], key)
+        self._has_palette = True
+        semantic_id = self._claim_name("palette")
+        return self._append(semantic_id, _ComponentKind.PRESENTATION, payload)
+
+    def lighting(
+        self,
+        *,
+        ambient_color: str | None = None,
+        ambient_energy: float | None = None,
+        sun_color: str | None = None,
+        sun_energy: float | None = None,
+        sky_top: str | None = None,
+        sky_horizon: str | None = None,
+    ) -> EnvironmentBuilder:
+        """Declare bounded environment lighting (energies clamped to 0..2)."""
+
+        self._ensure_mutable()
+        if self._has_lighting:
+            raise ValueError("lighting already declared")
+        payload: dict[str, object] = {"component": "lighting"}
+        if ambient_color is not None:
+            payload["ambient_color"] = _parse_color(ambient_color, "ambient_color")
+        if ambient_energy is not None:
+            payload["ambient_energy"] = _clamp(
+                ambient_energy, "ambient_energy", 0.0, 2.0
+            )
+        if sun_color is not None:
+            payload["sun_color"] = _parse_color(sun_color, "sun_color")
+        if sun_energy is not None:
+            payload["sun_energy"] = _clamp(sun_energy, "sun_energy", 0.0, 2.0)
+        if sky_top is not None:
+            payload["sky_top"] = _parse_color(sky_top, "sky_top")
+        if sky_horizon is not None:
+            payload["sky_horizon"] = _parse_color(sky_horizon, "sky_horizon")
+        if len(payload) == 1:
+            raise ValueError("lighting requires at least one setting")
+        self._has_lighting = True
+        semantic_id = self._claim_name("lighting")
+        return self._append(semantic_id, _ComponentKind.PRESENTATION, payload)
+
+    def custom_kit(
+        self,
+        name: str,
+        *,
+        category: str,
+        blocking: bool,
+        parts: _Sequence[object],
+    ) -> EnvironmentBuilder:
+        """Declare a small primitive assembly kit (max 12 per environment).
+
+        ``parts`` are BoxPart/CylinderPart/ConePart/SpherePart instances
+        (max 16 per kit, extents bounded to 8 m). Blocking kits receive
+        conservative per-part colliders; nonblocking kits get none. Custom
+        kits are used exactly like curated kits by prop/scatter/landmark/
+        structure according to their category.
+        """
+
+        self._ensure_mutable()
+        if len(self._custom_kits) >= _MAX_CUSTOM_KITS:
+            raise ValueError(
+                f"at most {_MAX_CUSTOM_KITS} custom kits per environment"
+            )
+        if name in _KITS:
+            raise ValueError(f"kit name shadows a curated kit: {name}")
+        if name in self._custom_kits:
+            raise ValueError(f"duplicate kit: {name}")
+        if category not in {"structure", "landmark", "vegetation"}:
+            raise ValueError(
+                f"category must be structure, landmark, or vegetation: {category}"
+            )
+        if not isinstance(blocking, bool):
+            raise ValueError("blocking must be a bool")
+        if not parts or len(parts) > _MAX_CUSTOM_KIT_PARTS:
+            raise ValueError(
+                f"parts must contain 1..{_MAX_CUSTOM_KIT_PARTS} entries"
+            )
+        kit_parts = []
+        for index, part in enumerate(parts):
+            to_kit_part = getattr(part, "to_kit_part", None)
+            if to_kit_part is None:
+                raise ValueError(
+                    f"parts[{index}] must be a BoxPart, CylinderPart, "
+                    "ConePart, or SpherePart"
+                )
+            kit_part = to_kit_part()
+            _require_material(kit_part.material, self._custom_materials)
+            kit_parts.append(kit_part)
+        kit = _Kit(
+            name=name,
+            category=category,  # type: ignore[arg-type]
+            blocking=blocking,
+            parts=tuple(kit_parts),
+        )
+        semantic_id = self._claim_name(name)
+        self._custom_kits[name] = kit
+        part_payloads: list[dict[str, object]] = []
+        for kit_part in kit_parts:
+            entry: dict[str, object] = {
+                "shape": kit_part.shape,
+                "offset": [
+                    kit_part.offset[0],
+                    kit_part.offset[1],
+                    kit_part.offset[2],
+                ],
+                "material": kit_part.material,
+                "yaw_degrees": kit_part.yaw_degrees,
+            }
+            if kit_part.size is not None:
+                entry["size"] = [
+                    kit_part.size[0],
+                    kit_part.size[1],
+                    kit_part.size[2],
+                ]
+            if kit_part.radius is not None:
+                entry["radius"] = kit_part.radius
+            if kit_part.height is not None:
+                entry["height"] = kit_part.height
+            part_payloads.append(entry)
+        return self._append(
+            semantic_id,
+            _ComponentKind.PRESENTATION,
+            {
+                "component": "custom_kit",
+                "category": category,
+                "blocking": blocking,
+                "parts": part_payloads,
             },
         )
 
@@ -644,7 +920,9 @@ class EnvironmentBuilder:
                     f"{min(ground_zs):.1f}..{max(ground_zs):.1f}"
                 )
 
-        blocker_hit = _spawn_blocker_hit(self._spawn_position, self._components)
+        blocker_hit = _spawn_blocker_hit(
+            self._spawn_position, self._components, self._resolve_kit
+        )
         if blocker_hit is not None:
             raise ValueError(
                 "spawn intersects a blocker: "

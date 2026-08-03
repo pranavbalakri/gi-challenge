@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math as _math
+import re as _re
 from enum import StrEnum as _StrEnum
 from typing import Annotated as _Annotated
 from typing import Literal as _Literal
@@ -23,6 +24,7 @@ from envmaker.core.signals import Signal as _Signal
 __all__ = [
     "ISO_YAW_DEGREES",
     "ISO_PITCH_DEGREES",
+    "HEX_COLOR_PATTERN",
     "ColliderShape",
     "ColliderSpec",
     "CameraSpec",
@@ -32,6 +34,8 @@ __all__ = [
     "SphereVisual",
     "RibbonVisual",
     "PrimitiveVisual",
+    "MaterialSpec",
+    "PresentationSpec",
     "SceneNode",
     "GodotSceneSpec",
     "CandidateScene",
@@ -174,6 +178,94 @@ PrimitiveVisual = _Annotated[
     _Field(discriminator="shape"),
 ]
 
+HEX_COLOR_PATTERN: str = r"^#[0-9a-f]{6}$"
+
+MAX_EMISSION_STRENGTH: float = 4.0
+
+
+class MaterialSpec(_BaseModel):
+    """One resolved visual material: bounded StandardMaterial3D settings.
+
+    Colors are canonical lowercase ``#rrggbb`` (no alpha: transparency is
+    unsupported). Optional fields omit from canonical JSON when None so a
+    plain-color entry serializes minimally.
+    """
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    color: str = _Field(pattern=HEX_COLOR_PATTERN)
+    emission_color: str | None = _Field(
+        default=None,
+        pattern=HEX_COLOR_PATTERN,
+        json_schema_extra={"omit_when_none": True},
+    )
+    emission_strength: float | None = _Field(
+        default=None,
+        ge=0.0,
+        le=MAX_EMISSION_STRENGTH,
+        allow_inf_nan=False,
+        json_schema_extra={"omit_when_none": True},
+    )
+    roughness: float | None = _Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        allow_inf_nan=False,
+        json_schema_extra={"omit_when_none": True},
+    )
+    metallic: float | None = _Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        allow_inf_nan=False,
+        json_schema_extra={"omit_when_none": True},
+    )
+
+
+class PresentationSpec(_BaseModel):
+    """Bounded environment-level lighting and sky configuration.
+
+    Every field is optional; the materializer keeps its derived defaults for
+    omitted values. No shaders, fog, post-processing, or camera control.
+    """
+
+    model_config = _ConfigDict(frozen=True, extra="forbid")
+
+    sky_top: str | None = _Field(
+        default=None,
+        pattern=HEX_COLOR_PATTERN,
+        json_schema_extra={"omit_when_none": True},
+    )
+    sky_horizon: str | None = _Field(
+        default=None,
+        pattern=HEX_COLOR_PATTERN,
+        json_schema_extra={"omit_when_none": True},
+    )
+    sun_color: str | None = _Field(
+        default=None,
+        pattern=HEX_COLOR_PATTERN,
+        json_schema_extra={"omit_when_none": True},
+    )
+    sun_energy: float | None = _Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        allow_inf_nan=False,
+        json_schema_extra={"omit_when_none": True},
+    )
+    ambient_color: str | None = _Field(
+        default=None,
+        pattern=HEX_COLOR_PATTERN,
+        json_schema_extra={"omit_when_none": True},
+    )
+    ambient_energy: float | None = _Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        allow_inf_nan=False,
+        json_schema_extra={"omit_when_none": True},
+    )
+
 
 class SceneNode(_BaseModel):
     """One transformed semantic node in an engine-facing scene."""
@@ -194,13 +286,26 @@ class SceneNode(_BaseModel):
 
 
 class GodotSceneSpec(_BaseModel):
-    """A validated Godot scene wiring specification."""
+    """A validated Godot scene wiring specification.
+
+    ``materials`` and ``presentation`` are additive visual-extension fields
+    under the omit_when_none canonical rule: scenes that declare neither
+    keep byte-identical canonical JSON and fingerprints.
+    """
 
     model_config = _ConfigDict(frozen=True, extra="forbid")
 
     nodes: tuple[SceneNode, ...]
     camera: CameraSpec
     controller_semantic_id: str = _Field(pattern=_SEMANTIC_ID_PATTERN)
+    materials: dict[str, MaterialSpec] | None = _Field(
+        default=None,
+        json_schema_extra={"omit_when_none": True},
+    )
+    presentation: PresentationSpec | None = _Field(
+        default=None,
+        json_schema_extra={"omit_when_none": True},
+    )
 
     @_model_validator(mode="after")
     def _validate_scene_wiring(self) -> GodotSceneSpec:
@@ -213,6 +318,12 @@ class GodotSceneSpec(_BaseModel):
             raise ValueError("camera follow target not in scene")
         if self.controller_semantic_id not in semantic_ids:
             raise ValueError("controller target not in scene")
+        if self.materials is not None:
+            if len(self.materials) > 64:
+                raise ValueError("materials table must have at most 64 entries")
+            for name in self.materials:
+                if _re.fullmatch(r"[a-z][a-z0-9_.]{0,63}", name) is None:
+                    raise ValueError(f"invalid material table name: {name}")
         return self
 
 

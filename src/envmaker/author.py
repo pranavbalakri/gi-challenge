@@ -14,8 +14,8 @@ from pathlib import Path as _Path
 from typing import Callable as _Callable
 
 from envmaker.agent.loop import select_landmark_probe as _select_landmark_probe
+from envmaker.agent.prompts import AGENT_CONTRACT as _AGENT_CONTRACT
 from envmaker.agent.prompts import PROMPT_VERSION as _PROMPT_VERSION
-from envmaker.agent.prompts import SYSTEM_PROMPT as _SYSTEM_PROMPT
 from envmaker.agent.tools import _aesthetics_probe
 from envmaker.core.artifacts import canonical_fingerprint as _canonical_fingerprint
 from envmaker.core.artifacts import canonical_json as _canonical_json
@@ -125,6 +125,30 @@ def read_session_prompt(run_dir: _Path) -> tuple[str, int]:
     return prompt, seed
 
 
+def _snapshot_revision(run_dir: _Path, source: str, runlog: _RunLog) -> None:
+    """Persist each distinct source into revisions/rev-N.py (API-loop parity)."""
+
+    revision_dir = run_dir / "revisions"
+    revision_dir.mkdir(exist_ok=True)
+    existing = sorted(
+        revision_dir.glob("rev-*.py"),
+        key=lambda p: int(p.stem.split("-")[1]),
+    )
+    if existing and existing[-1].read_text(encoding="utf-8") == source:
+        return
+    index = len(existing) + 1
+    path = revision_dir / f"rev-{index}.py"
+    path.write_text(source, encoding="utf-8")
+    runlog.append(
+        "revision",
+        {
+            "index": index,
+            "path": f"revisions/rev-{index}.py",
+            "bytes": len(source.encode("utf-8")),
+        },
+    )
+
+
 def _signal_rows(reports: object) -> list[tuple[str, str, str]]:
     rows: list[tuple[str, str, str]] = []
     for report in reports:  # type: ignore[attr-defined]
@@ -156,6 +180,8 @@ def step_session(
     if "raise NotImplementedError" in source:
         runlog.append("step", {"status": "empty"})
         return StepOutcome(status="empty")
+
+    _snapshot_revision(run_dir, source, runlog)
 
     static = _validate_static(source, limits=_DEFAULT_LIMITS)
     stages = {report.stage.value: report.passed for report in static.reports}
@@ -212,15 +238,18 @@ def step_session(
 
         probe = _select_landmark_probe(static.model, static.candidate)
         if probe is None:
+            # Landmark-free environments get a synthesized farthest-point
+            # probe; None means even that failed (no clear ground sample).
             runlog.append("step", {"status": "runtime_failed"})
             return StepOutcome(
                 status="runtime_failed",
                 stages=stages,
                 signals=(
                     (
-                        "v7.no_landmark",
-                        "no landmark resolves to a navigation target",
-                        "declare a landmark so navigation has a distinct goal",
+                        "v7.no_probe_target",
+                        "no navigation target could be resolved (no landmark "
+                        "and no clear ground point beyond 1.5 m of spawn)",
+                        "enlarge the open ground or declare a landmark",
                     ),
                 ),
             )
@@ -311,6 +340,11 @@ def step_session(
 
 
 def agent_instructions() -> str:
-    """Everything the enclosing agent needs, in one printout."""
+    """Everything the enclosing agent needs, in one printout.
 
-    return AGENT_WORKFLOW + "\n\nSDK CONTRACT AND GUIDANCE\n" + _SYSTEM_PROMPT
+    Uses AGENT_CONTRACT, not the API-loop SYSTEM_PROMPT: the coding agent
+    writes environment.py with its own file tools, so the fenced-reply and
+    tool-protocol rules do not apply here.
+    """
+
+    return AGENT_WORKFLOW + "\n\nSDK CONTRACT AND GUIDANCE\n" + _AGENT_CONTRACT

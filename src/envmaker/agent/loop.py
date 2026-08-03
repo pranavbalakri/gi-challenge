@@ -167,17 +167,98 @@ def _default_driver_factory(run_dir: _Path) -> object:
     return driver
 
 
+def _probe_for_target(
+    *,
+    target_landmark_id: str | None = None,
+    target_position: tuple[float, float] | None = None,
+) -> _NavigationProbe:
+    return _NavigationProbe(
+        target_landmark_id=target_landmark_id,
+        target_position=target_position,
+        success_radius_m=1.5,
+        max_ticks=2400,
+        action_repeat=1,
+        allowed_connector_types=(),
+        stuck_timeout_ticks=180,
+        terminal_reasons=(
+            _TerminalReason.ARRIVED,
+            _TerminalReason.TIMEOUT,
+        ),
+    )
+
+
+def _farthest_clear_point_probe(candidate: object) -> _NavigationProbe | None:
+    """Synthesize a probe at the farthest clear-ground point from spawn.
+
+    A landmark is a validation instrument, not a runtime requirement: when
+    an environment declares none, traversal evidence still needs a target,
+    so aim at the farthest blocker-clear sample on the ground plane.
+    """
+
+    import math as _math
+
+    from envmaker.core.scene_spec import PlaneVisual as _PlaneVisual
+    from envmaker.runtime import _blocker_oriented_list, _point_clear
+
+    scene = getattr(candidate, "scene", None)
+    nodes = getattr(scene, "nodes", ())
+    ground = None
+    ground_area = 0.0
+    for node in nodes:
+        visual = getattr(node, "visual", None)
+        if isinstance(visual, _PlaneVisual):
+            area = visual.size_x * visual.size_z
+            if area > ground_area:
+                ground_area = area
+                ground = node
+    spawn_id = getattr(scene, "controller_semantic_id", None)
+    spawn = next(
+        (node for node in nodes if node.semantic_id == spawn_id), None
+    )
+    if ground is None or spawn is None:
+        return None
+
+    margin = 0.6
+    half_x = ground.visual.size_x / 2.0 - margin
+    half_z = ground.visual.size_z / 2.0 - margin
+    if half_x <= 0.0 or half_z <= 0.0:
+        return None
+    center_x = ground.transform.origin.x
+    center_z = ground.transform.origin.z
+    spawn_x = spawn.transform.origin.x
+    spawn_z = spawn.transform.origin.z
+    blockers = _blocker_oriented_list(candidate)
+
+    best: tuple[float, float] | None = None
+    best_distance = 1.5  # below this a route would be trivial
+    grid = 16
+    for i in range(grid):
+        for j in range(grid):
+            x = center_x - half_x + (2.0 * half_x) * (i + 0.5) / grid
+            z = center_z - half_z + (2.0 * half_z) * (j + 0.5) / grid
+            if not _point_clear(x, z, blockers):
+                continue
+            distance = _math.hypot(x - spawn_x, z - spawn_z)
+            if distance > best_distance:
+                best_distance = distance
+                best = (x, z)
+    if best is None:
+        return None
+    return _probe_for_target(target_position=best)
+
+
 def select_landmark_probe(
     model: object,
     candidate: object,
 ) -> _NavigationProbe | None:
-    """Resolve the first declared landmark to the canonical navigation probe.
+    """Resolve the canonical navigation probe for a candidate.
 
     The ONLY probe-selection logic in the system: the first component in
-    declaration order with ``payload["component"] == "landmark"``, resolved to
-    its compiled ``{name}.0`` kit-part node. Returns None when no landmark
-    resolves. cli.py and evaluation.py must use this helper, never a local
-    heuristic.
+    declaration order with ``payload["component"] == "landmark"``, resolved
+    to its compiled ``{name}.0`` kit-part node. Landmark-free environments
+    fall back to a synthesized farthest-clear-point probe (goals are not
+    required — the probe is validation instrumentation). cli.py and
+    evaluation.py must use this helper, never a local heuristic.
     """
 
     node_ids = {
@@ -190,19 +271,8 @@ def select_landmark_probe(
             continue
         candidate_id = f"{component.semantic_id}.0"
         if candidate_id in node_ids:
-            return _NavigationProbe(
-                target_landmark_id=candidate_id,
-                success_radius_m=1.5,
-                max_ticks=2400,
-                action_repeat=1,
-                allowed_connector_types=(),
-                stuck_timeout_ticks=180,
-                terminal_reasons=(
-                    _TerminalReason.ARRIVED,
-                    _TerminalReason.TIMEOUT,
-                ),
-            )
-    return None
+            return _probe_for_target(target_landmark_id=candidate_id)
+    return _farthest_clear_point_probe(candidate)
 
 
 def _ensure_probe(context: _ToolContext) -> None:

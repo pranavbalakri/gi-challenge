@@ -51,5 +51,5 @@ uv run envmaker run "<prompt>"   # autonomous API mode (needs OPENAI_API_KEY in 
 uv run pytest -q                 # full test suite (live Godot tests skip if sandboxed)
 ```
 
-More detail: `README.md` (usage), `architecture.md` (design),
+More detail: `README.md` (usage), `documents/architecture.md` (design),
 `evals/mvp-report.md` (evaluation results).
