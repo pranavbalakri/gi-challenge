@@ -29,9 +29,9 @@ flowchart TD
 
 And an example generated world, with the following prompt:
 
-```
-A riverside shrine at dusk: a river crosses one side of the map, and a winding dirt path follows its bank from the agent's spawn to a small shrine that glows warm gold at the far end. Deep indigo sky fading to amber at the horizon, dusky muted-green ground. Two timber huts sit along the path with small glowing amber lanterns beside their doors. Pines and oaks of varied sizes and rotations cluster loosely away from the path, with a few boulders anchoring the corners. Keep the riverbank and the full path clearly visible and unobstructed.
-```
+
+> A riverside shrine at dusk: a river crosses one side of the map, and a winding dirt path follows its bank from the agent's spawn to a small shrine that glows warm gold at the far end. Deep indigo sky fading to amber at the horizon, dusky muted-green ground. Two timber huts sit along the path with small glowing amber lanterns beside their doors. Pines and oaks of varied sizes and rotations cluster loosely away from the path, with a few boulders anchoring the corners. Keep the riverbank and the full path clearly visible and unobstructed.
+
 
 ![Example Image](images/demo.png)
 
