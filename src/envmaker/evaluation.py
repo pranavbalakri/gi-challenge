@@ -488,6 +488,15 @@ def run_evaluation(
     """Iterate prompts × seeds × variants; never raise on a failed cell."""
 
     config = load_eval_config(config_path)
+    config_prompt_version = str(config.get("prompt_version", ""))
+    if config_prompt_version != _PROMPT_VERSION:
+        raise ValueError(
+            "eval config prompt_version "
+            f"{config_prompt_version!r} does not match the imported "
+            f"authoring PROMPT_VERSION {_PROMPT_VERSION!r}; update the "
+            "config deliberately before rerunning so reports are never "
+            "mislabeled"
+        )
     model_name = str(config.get("model", "gpt-4o-mini"))
     budgets = dict(config.get("budgets") or {})
     max_turns = int(budgets.get("max_turns", 8))

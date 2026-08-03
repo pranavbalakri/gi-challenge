@@ -35,9 +35,13 @@ _LIMITS = ResourceLimits(
     output_bytes=1_048_576,
     wall_seconds=60.0,
 )
-_MINI_YAML = """
+from envmaker.agent.prompts import PROMPT_VERSION as _LIVE_PROMPT_VERSION
+
+# Interpolated so the config guard (config prompt_version must equal the
+# imported PROMPT_VERSION) keeps passing across prompt bumps.
+_MINI_YAML = f"""
 model: gpt-4o-mini
-prompt_version: "1"
+prompt_version: "{_LIVE_PROMPT_VERSION}"
 budgets:
   max_turns: 2
   wall_seconds: 30
@@ -351,9 +355,9 @@ def test_run_evaluation_namespaces_roots_no_stage_bleed(
 
     config_path = tmp_path / "mini.yaml"
     config_path.write_text(
-        """
+        f"""
 model: gpt-4o-mini
-prompt_version: "1"
+prompt_version: "{_LIVE_PROMPT_VERSION}"
 budgets:
   max_turns: 1
   wall_seconds: 5
@@ -486,3 +490,31 @@ def test_run_evaluation_keyboard_interrupt_writes_partial(
     assert "| p1 |" in text
     sidecar = json.loads(report_path.with_suffix(".json").read_text(encoding="utf-8"))
     assert len(sidecar["results"]) >= 1
+
+
+def test_run_matrix_refuses_prompt_version_mismatch(tmp_path: Path) -> None:
+    """Reports must never be silently mislabeled with a stale prompt version."""
+
+    config = tmp_path / "mismatch.yaml"
+    config.write_text(
+        "model: gpt-5.4-mini\n"
+        'prompt_version: "1"\n'
+        "seeds: [7]\n"
+        "variants: [oneshot]\n"
+        "prompts:\n"
+        "  - id: sample\n"
+        "    text: a meadow\n"
+        "    checklist:\n"
+        "      - ground exists\n"
+        "      - spawn exists\n"
+        "      - route works\n",
+        encoding="utf-8",
+    )
+    from envmaker.agent.prompts import PROMPT_VERSION
+    from envmaker.evaluation import run_evaluation
+
+    assert PROMPT_VERSION != "1", "update this test if v1 returns"
+    with pytest.raises(ValueError, match="does not match the imported"):
+        run_evaluation(
+            config, tmp_path / "report.md", runs_root=tmp_path / "runs"
+        )

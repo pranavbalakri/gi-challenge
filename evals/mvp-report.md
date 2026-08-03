@@ -2,6 +2,7 @@
 
 - model: `gpt-5.4-mini`
 - prompt_version: `1`
+- note: historical run under authoring prompt v1. The current prompt is v2 (the bounded visual-extension layer landed after this evaluation); the runner now refuses to execute when the config's prompt_version does not match the imported `PROMPT_VERSION`, so future reports cannot be mislabeled.
 - eval_root: `runs/eval/20260802-065054-14e3ae07`
 - cells: 12
 

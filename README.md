@@ -4,7 +4,7 @@ Hi! This is my submission to the challenge. EnvMaker turns a text prompt ("a sto
 
 Environments render as organic 2D low-poly isometric scenes (like a Hades-style camera). 
 
-The authoring model writes a small Python program against an SDK containing parametric kits, 2D footprint geometry, and certain props. This method was inspired by [Articraft](https://arxiv.org/html/2605.15187v1#S3), a harness for generating 3D models that used a similar SDK. The agent can also theme the world by editing color palattes, generating custom materials, lighting, and other small primitive kits (`examples/alien/environment.py` is a sealed alien world built this way).
+The authoring model writes a small Python program against an SDK containing parametric kits, 2D footprint geometry, and certain props. This method was inspired by [Articraft](https://arxiv.org/html/2605.15187v1#S3), a harness for generating 3D models that used a similar SDK. The agent can also theme the world through color palettes, custom materials, bounded lighting, and small primitive kits — the alien acceptance fixture (`examples/alien/environment.py`) exercises all four.
 
 Here is a small system diagram:
 
@@ -47,13 +47,9 @@ Claude picks up the workflow from `CLAUDE.md` automatically. It installs depende
 
 Python 3.12 and [uv](https://docs.astral.sh/uv/) are the only prerequisites; a script fetches the pinned Godot 4.7.1 build (macOS verified; Linux x86_64/arm64 and Windows served by the same script, or set `GODOT_BIN=<path>` to use your own binary).
 
-You also need to create a .env file and set an OPENAI_API_KEY environment variable, or type the following command in your terminal:
+An OpenAI API key is required only for the autonomous `envmaker run` command; the demo, contract suite, and Claude Code authoring workflow are all keyless. For `run`, put `OPENAI_API_KEY=sk-...` in a `.env` file at the repo root (or export it in your shell).
 
-```bash
-export OPENAI_API_KEY=sk-...
-```
-
-Then:
+Setup:
 
 ```bash
 uv sync
