@@ -47,6 +47,14 @@ Claude picks up the workflow from `CLAUDE.md` automatically. It installs depende
 
 Python 3.12 and [uv](https://docs.astral.sh/uv/) are the only prerequisites; a script fetches the pinned Godot 4.7.1 build (macOS verified; Linux x86_64/arm64 and Windows served by the same script, or set `GODOT_BIN=<path>` to use your own binary).
 
+You also need to create a .env file and set an OPENAI_API_KEY environment variable, or type the following command in your terminal:
+
+```bash
+export OPENAI_API_KEY=sk-...
+```
+
+Then:
+
 ```bash
 uv sync
 uv run python scripts/get_godot.py
@@ -63,5 +71,3 @@ uv run envmaker check
 # --open shows the accepted world when it finishes.
 uv run envmaker run "a frozen village with a walled square and a watchtower" --open
 ```
-
-Validation runs keep their Godot process minimized, so nothing pops onto your screen; a window only opens for `--view` and `--open`. Every run leaves `runs/<id>/` with the event trace (`runlog.jsonl`), each source revision, the renders, and, on acceptance, the sealed `environment-definition.json`. `uv run pytest -q` runs the full test suite. Evaluation results across six prompts (one-shot vs. repair loop): [evals/mvp-report.md](evals/mvp-report.md).
