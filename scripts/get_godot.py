@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import platform
 import shutil
+import ssl
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -63,6 +65,35 @@ def _extract_zip_preserving_modes(archive: Path, destination: Path) -> None:
                 target.chmod(mode)
 
 
+def open_release_url(url: str):
+    """Open the release URL with working certificate verification.
+
+    python.org framework builds on macOS do not use the system trust store
+    and fail every stdlib HTTPS call until their 'Install Certificates'
+    step has been run. The project venv ships certifi (via the OpenAI
+    client), so fall back to certifi's CA bundle — never to disabled
+    verification, since this downloads an executable.
+    """
+
+    try:
+        return urllib.request.urlopen(url)
+    except urllib.error.URLError as exc:
+        if not isinstance(exc.reason, ssl.SSLCertVerificationError):
+            raise
+    try:
+        import certifi
+    except ImportError:
+        raise SystemExit(
+            "TLS certificate verification failed and certifi is not "
+            "installed. Run your Python's 'Install Certificates.command' "
+            "(python.org builds), or run this script via `uv run python "
+            "scripts/get_godot.py`, or set GODOT_BIN=<path> to an existing "
+            "Godot 4.7.1 binary."
+        )
+    context = ssl.create_default_context(cafile=certifi.where())
+    return urllib.request.urlopen(url, context=context)
+
+
 def main() -> int:
     force = "--force" in sys.argv
     system = platform.system()
@@ -81,7 +112,7 @@ def main() -> int:
     print(f"downloading {url}")
     with tempfile.TemporaryDirectory() as scratch:
         archive = Path(scratch) / asset
-        with urllib.request.urlopen(url) as response, archive.open("wb") as out:
+        with open_release_url(url) as response, archive.open("wb") as out:
             total = int(response.headers.get("Content-Length") or 0)
             copied = 0
             while True:
